@@ -28,3 +28,7 @@ Thumbs.db
 .idea/
 *.swp
 .env
+
+# Arquivos de Teste / Dados Fiscais Locais (Não versionar XMLs)
+*.xml
+exemplos_xml/
