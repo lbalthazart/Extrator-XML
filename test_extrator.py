@@ -396,5 +396,78 @@ class TestExtratorNFe(unittest.TestCase):
         finally:
             os.remove(temp_path)
 
+    def test_11_ordem_exibicao_impostos(self):
+        """Valida que a ordem de exibição seja estritamente: ICMS > CBS > IBS UF > IBS MUN > IS > IPI > PIS/COFINS."""
+        xml_content = """<?xml version="1.0" encoding="UTF-8"?>
+        <NFe xmlns="http://www.portalfiscal.inf.br/nfe">
+            <infNFe Id="NFe35261100000000000191550010000001231000001234">
+                <ide><nNF>1</nNF><serie>1</serie></ide>
+                <emit><xNome>TESTE ORDEM</xNome></emit>
+                <det nItem="1">
+                    <prod><vProd>1000.00</vProd></prod>
+                    <imposto>
+                        <ICMS>
+                            <ICMS00>
+                                <orig>0</orig>
+                                <CST>00</CST>
+                                <vBC>1000.00</vBC>
+                                <pICMS>18.00</pICMS>
+                                <vICMS>180.00</vICMS>
+                            </ICMS00>
+                        </ICMS>
+                        <IPI>
+                            <cEnq>999</cEnq>
+                            <IPITrib><CST>50</CST><vBC>1000.00</vBC><pIPI>5.00</pIPI><vIPI>50.00</vIPI></IPITrib>
+                        </IPI>
+                        <PIS>
+                            <PISAliq><CST>01</CST><vBC>1000.00</vBC><pPIS>1.65</pPIS><vPIS>16.50</vPIS></PISAliq>
+                        </PIS>
+                        <COFINS>
+                            <COFINSAliq><CST>01</CST><vBC>1000.00</vBC><pCOFINS>7.60</pCOFINS><vCOFINS>76.00</vCOFINS></COFINSAliq>
+                        </COFINS>
+                        <IS>
+                            <CST>000</CST><cClassTrib>000001</cClassTrib><vBC>1000.00</vBC><pIS>2.00</pIS><vIS>20.00</vIS>
+                        </IS>
+                        <IBSCBS>
+                            <CST>000</CST><cClassTrib>000001</cClassTrib>
+                            <gIBSCBS>
+                                <vBC>1000.00</vBC>
+                                <gIBSUF><pIBSUF>0.05</pIBSUF><vIBSUF>0.50</vIBSUF></gIBSUF>
+                                <gIBSMun><pIBSMun>0.05</pIBSMun><vIBSMun>0.50</vIBSMun></gIBSMun>
+                                <gCBS><pCBS>0.90</pCBS><vCBS>9.00</vCBS></gCBS>
+                            </gIBSCBS>
+                        </IBSCBS>
+                    </imposto>
+                </det>
+            </infNFe>
+        </NFe>
+        """
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False, encoding='utf-8') as f:
+            f.write(xml_content)
+            temp_path = f.name
+        
+        try:
+            texto, _ = extrair_dados_xml(temp_path)
+            pos_icms = texto.find("[ICMS]")
+            pos_cbs = texto.find("[CBS]")
+            pos_ibs_uf = texto.find("[IBS UF]")
+            pos_ibs_mun = texto.find("[IBS MUN]")
+            pos_is = texto.find("[IMPOSTO SELETIVO]")
+            pos_ipi = texto.find("[IPI]")
+            pos_pis_cofins = texto.find("[PIS/COFINS]")
+            
+            # Todos os blocos devem existir
+            self.assertTrue(all(p > -1 for p in [pos_icms, pos_cbs, pos_ibs_uf, pos_ibs_mun, pos_is, pos_ipi, pos_pis_cofins]))
+            
+            # Ordem solicitada: ICMS > CBS > IBS UF > IBS MUN > IS > IPI > PIS/COFINS
+            self.assertTrue(pos_icms < pos_cbs, f"ICMS ({pos_icms}) deve vir antes de CBS ({pos_cbs})")
+            self.assertTrue(pos_cbs < pos_ibs_uf, f"CBS ({pos_cbs}) deve vir antes de IBS UF ({pos_ibs_uf})")
+            self.assertTrue(pos_ibs_uf < pos_ibs_mun, f"IBS UF ({pos_ibs_uf}) deve vir antes de IBS MUN ({pos_ibs_mun})")
+            self.assertTrue(pos_ibs_mun < pos_is, f"IBS MUN ({pos_ibs_mun}) deve vir antes de IS ({pos_is})")
+            self.assertTrue(pos_is < pos_ipi, f"IS ({pos_is}) deve vir antes de IPI ({pos_ipi})")
+            self.assertTrue(pos_ipi < pos_pis_cofins, f"IPI ({pos_ipi}) deve vir antes de PIS/COFINS ({pos_pis_cofins})")
+        finally:
+            os.remove(temp_path)
+
 if __name__ == '__main__':
     unittest.main()

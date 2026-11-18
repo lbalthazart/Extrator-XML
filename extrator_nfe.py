@@ -396,79 +396,7 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                     except Exception:
                         linhas.append(f"       DIFAL       -> ATENÇÃO: Operação Interestadual (CFOP {cfop}). Cálculo manual necessário.")
 
-                # 3. Extração de IPI (Imposto sobre Produtos Industrializados)
-                ipi = imposto.find('IPI')
-                if ipi is not None:
-                    cEnq = ipi.find('cEnq').text if ipi.find('cEnq') is not None else ''
-                    ipi_trib = ipi.find('IPITrib')
-                    if ipi_trib is not None:
-                        cst_ipi = ipi_trib.find('CST').text if ipi_trib.find('CST') is not None else 'N/A'
-                        vbc_ipi = ipi_trib.find('vBC').text if ipi_trib.find('vBC') is not None else '0.00'
-                        p_ipi = ipi_trib.find('pIPI').text if ipi_trib.find('pIPI') is not None else '0.00'
-                        v_ipi = ipi_trib.find('vIPI').text if ipi_trib.find('vIPI') is not None else '0.00'
-                        linhas.append(f"[IPI] CST: {cst_ipi} | cEnq: {cEnq} | BC: R$ {vbc_ipi} | Alíq: {p_ipi}% | Valor: R$ {v_ipi}")
-                    else:
-                        ipi_nt = ipi.find('IPINT')
-                        if ipi_nt is not None:
-                            cst_ipi = ipi_nt.find('CST').text if ipi_nt.find('CST') is not None else 'N/A'
-                            linhas.append(f"[IPI] Não tributado (CST: {cst_ipi} | cEnq: {cEnq})")
-
-                # 4. Extração de PIS e COFINS
-                pis = imposto.find('PIS')
-                cofins = imposto.find('COFINS')
-                pis_part = ""
-                cofins_part = ""
-                if pis is not None:
-                    for p_child in pis:
-                        cst_p = p_child.find('CST').text if p_child.find('CST') is not None else 'N/A'
-                        vbc_p = p_child.find('vBC').text if p_child.find('vBC') is not None else '0.00'
-                        aliq_p = p_child.find('pPIS').text if p_child.find('pPIS') is not None else '0.00'
-                        val_p = p_child.find('vPIS').text if p_child.find('vPIS') is not None else '0.00'
-                        if to_decimal(val_p) > 0 or to_decimal(vbc_p) > 0:
-                            pis_part = f"PIS (CST {cst_p}) -> BC: R$ {vbc_p} | Alíq: {aliq_p}% | Valor: R$ {val_p}"
-                        else:
-                            pis_part = f"PIS (CST {cst_p}) -> Sem destaque"
-                        break
-                if cofins is not None:
-                    for c_child in cofins:
-                        cst_c = c_child.find('CST').text if c_child.find('CST') is not None else 'N/A'
-                        vbc_c = c_child.find('vBC').text if c_child.find('vBC') is not None else '0.00'
-                        aliq_c = c_child.find('pCOFINS').text if c_child.find('pCOFINS') is not None else '0.00'
-                        val_c = c_child.find('vCOFINS').text if c_child.find('vCOFINS') is not None else '0.00'
-                        if to_decimal(val_c) > 0 or to_decimal(vbc_c) > 0:
-                            cofins_part = f"COFINS (CST {cst_c}) -> BC: R$ {vbc_c} | Alíq: {aliq_c}% | Valor: R$ {val_c}"
-                        else:
-                            cofins_part = f"COFINS (CST {cst_c}) -> Sem destaque"
-                        break
-                if pis_part or cofins_part:
-                    linhas.append(f"[PIS/COFINS] {pis_part} | {cofins_part}")
-
-                # 5. Extração e Auditoria Oficial de Imposto Seletivo (IS)
-                is_node = imposto.find('IS')
-                if is_node is not None:
-                    cst_is = is_node.find('CST').text if is_node.find('CST') is not None else 'N/A'
-                    cClassTrib_is = is_node.find('cClassTrib').text if is_node.find('cClassTrib') is not None else 'N/A'
-                    cst_is_desc = CST_IS_DESCRICAO.get(cst_is, "Outros")
-                    vBC_is = is_node.find('vBC').text if is_node.find('vBC') is not None else '0.00'
-                    pIS = is_node.find('pIS').text if is_node.find('pIS') is not None else '0.00'
-                    vIS = is_node.find('vIS').text if is_node.find('vIS') is not None else '0.00'
-                    
-                    vIS_val = to_decimal(vIS)
-                    vBC_is_val = to_decimal(vBC_is)
-                    pIS_val = to_decimal(pIS)
-                    status_is = ""
-                    if vBC_is_val > 0 and pIS_val > 0:
-                        v_is_oficial = (vBC_is_val * (pIS_val / Decimal('100'))).quantize(PRECISAO_MOEDA, rounding=ROUND_HALF_EVEN)
-                        if abs(vIS_val - v_is_oficial) <= Decimal('0.01'):
-                            status_is = " [Auditoria RFB: ✔️ Conforme]"
-                        else:
-                            status_is = f" [Auditoria RFB: ⚠️ Divergência! XML: R$ {format_moeda_raw(vIS_val)} vs Oficial: R$ {format_moeda_raw(v_is_oficial)}]"
-                    elif cst_is in ('100', '200', '400', '500', '600') and vIS_val == 0:
-                        status_is = " [Auditoria RFB: ✔️ Conforme (Sem incidência/Zero)]"
-
-                    linhas.append(f"[IMPOSTO SELETIVO] CST: {cst_is} ({cst_is_desc}) | cClassTrib: {cClassTrib_is} | BC: R$ {vBC_is} | Alíq: {pIS}% | Valor: R$ {vIS}{status_is}")
-
-                # 6. Extração e Auditoria Oficial da Reforma Tributária (IBS e CBS - LC 214/2025)
+                # 2. Extração e Auditoria Oficial da Reforma Tributária (CBS e IBS - LC 214/2025)
                 vProd_dec = to_decimal(vProd)
                 vFrete_dec = to_decimal(vFrete)
                 vSeg_dec = to_decimal(vSeg)
@@ -564,6 +492,11 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                             det_str = (" | " + " | ".join(detalhes)) if detalhes else ""
                             return f"          [{nome_tributo}] Alíq: {p_nom}%{det_str} | Valor: R$ {format_moeda_raw(v_xml)} {status}"
 
+                        # ORDEM SOLICITADA: CBS > IBS UF > IBS MUN
+                        gCBS = gIBSCBS.find('gCBS')
+                        if gCBS is not None:
+                            linhas.append(auditar_tributo(gCBS, 'pCBS', 'vCBS', 'CBS'))
+
                         gIBSUF = gIBSCBS.find('gIBSUF')
                         if gIBSUF is not None:
                             linhas.append(auditar_tributo(gIBSUF, 'pIBSUF', 'vIBSUF', 'IBS UF'))
@@ -571,10 +504,6 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                         gIBSMun = gIBSCBS.find('gIBSMun')
                         if gIBSMun is not None:
                             linhas.append(auditar_tributo(gIBSMun, 'pIBSMun', 'vIBSMun', 'IBS MUN'))
-                            
-                        gCBS = gIBSCBS.find('gCBS')
-                        if gCBS is not None:
-                            linhas.append(auditar_tributo(gCBS, 'pCBS', 'vCBS', 'CBS'))
 
                     gIBSCBSMono = ibscbs.find('gIBSCBSMono')
                     if gIBSCBSMono is not None:
@@ -593,11 +522,12 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                         v_ibs_oficial = (q_mono * ad_ibs).quantize(PRECISAO_MOEDA, rounding=ROUND_HALF_EVEN)
                         v_cbs_oficial = (q_mono * ad_cbs).quantize(PRECISAO_MOEDA, rounding=ROUND_HALF_EVEN)
                         
-                        st_ibs = "✔️ Conforme" if abs(v_ibs_mono - v_ibs_oficial) <= Decimal('0.01') else f"⚠️ Divergência! (Oficial: R$ {format_moeda_raw(v_ibs_oficial)})"
                         st_cbs = "✔️ Conforme" if abs(v_cbs_mono - v_cbs_oficial) <= Decimal('0.01') else f"⚠️ Divergência! (Oficial: R$ {format_moeda_raw(v_cbs_oficial)})"
+                        st_ibs = "✔️ Conforme" if abs(v_ibs_mono - v_ibs_oficial) <= Decimal('0.01') else f"⚠️ Divergência! (Oficial: R$ {format_moeda_raw(v_ibs_oficial)})"
                         
-                        linhas.append(f"          [MONOFASIA] Qtd BC: {qBCMono_str} | adRem IBS: R$ {adRemIBS_str} | vIBS: R$ {vIBSMono_str} [Auditoria RFB: {st_ibs}]")
+                        # ORDEM: CBS > IBS
                         linhas.append(f"          [MONOFASIA] adRem CBS: R$ {adRemCBS_str} | vCBS: R$ {vCBSMono_str} [Auditoria RFB: {st_cbs}]")
+                        linhas.append(f"          [MONOFASIA] Qtd BC: {qBCMono_str} | adRem IBS: R$ {adRemIBS_str} | vIBS: R$ {vIBSMono_str} [Auditoria RFB: {st_ibs}]")
                     elif gIBSCBS is None:
                         if cst_ibscbs in ('400', '410', '550', '800', '810', '820', '830'):
                             linhas.append(f"          [Auditoria RFB: ✔️ Desonerado / Sem débito de tributo conforme CST {cst_ibscbs}]")
@@ -615,6 +545,78 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                     linhas.append(f"[IBS/CBS] Não destacado no XML [SIMULAÇÃO RTC TRANSIÇÃO OFICIAL]")
                     linhas.append(f"          Base Unificada: R$ {format_moeda_raw(base_unificada_oficial)} | CBS ({aliq_cbs_padrao:.2f}%): R$ {format_moeda_raw(v_cbs_simul)}")
                     linhas.append(f"          IBS ({aliq_ibs_padrao:.2f}%): R$ {format_moeda_raw(v_ibs_tot_simul)} (UF: R$ {format_moeda_raw(v_ibs_uf_simul)} | Mun: R$ {format_moeda_raw(v_ibs_mun_simul)})")
+
+                # 3. Extração e Auditoria Oficial de Imposto Seletivo (IS)
+                is_node = imposto.find('IS')
+                if is_node is not None:
+                    cst_is = is_node.find('CST').text if is_node.find('CST') is not None else 'N/A'
+                    cClassTrib_is = is_node.find('cClassTrib').text if is_node.find('cClassTrib') is not None else 'N/A'
+                    cst_is_desc = CST_IS_DESCRICAO.get(cst_is, "Outros")
+                    vBC_is = is_node.find('vBC').text if is_node.find('vBC') is not None else '0.00'
+                    pIS = is_node.find('pIS').text if is_node.find('pIS') is not None else '0.00'
+                    vIS = is_node.find('vIS').text if is_node.find('vIS') is not None else '0.00'
+                    
+                    vIS_val = to_decimal(vIS)
+                    vBC_is_val = to_decimal(vBC_is)
+                    pIS_val = to_decimal(pIS)
+                    status_is = ""
+                    if vBC_is_val > 0 and pIS_val > 0:
+                        v_is_oficial = (vBC_is_val * (pIS_val / Decimal('100'))).quantize(PRECISAO_MOEDA, rounding=ROUND_HALF_EVEN)
+                        if abs(vIS_val - v_is_oficial) <= Decimal('0.01'):
+                            status_is = " [Auditoria RFB: ✔️ Conforme]"
+                        else:
+                            status_is = f" [Auditoria RFB: ⚠️ Divergência! XML: R$ {format_moeda_raw(vIS_val)} vs Oficial: R$ {format_moeda_raw(v_is_oficial)}]"
+                    elif cst_is in ('100', '200', '400', '500', '600') and vIS_val == 0:
+                        status_is = " [Auditoria RFB: ✔️ Conforme (Sem incidência/Zero)]"
+
+                    linhas.append(f"[IMPOSTO SELETIVO] CST: {cst_is} ({cst_is_desc}) | cClassTrib: {cClassTrib_is} | BC: R$ {vBC_is} | Alíq: {pIS}% | Valor: R$ {vIS}{status_is}")
+
+                # 4. Extração de IPI (Imposto sobre Produtos Industrializados)
+                ipi = imposto.find('IPI')
+                if ipi is not None:
+                    cEnq = ipi.find('cEnq').text if ipi.find('cEnq') is not None else ''
+                    ipi_trib = ipi.find('IPITrib')
+                    if ipi_trib is not None:
+                        cst_ipi = ipi_trib.find('CST').text if ipi_trib.find('CST') is not None else 'N/A'
+                        vbc_ipi = ipi_trib.find('vBC').text if ipi_trib.find('vBC') is not None else '0.00'
+                        p_ipi = ipi_trib.find('pIPI').text if ipi_trib.find('pIPI') is not None else '0.00'
+                        v_ipi = ipi_trib.find('vIPI').text if ipi_trib.find('vIPI') is not None else '0.00'
+                        linhas.append(f"[IPI] CST: {cst_ipi} | cEnq: {cEnq} | BC: R$ {vbc_ipi} | Alíq: {p_ipi}% | Valor: R$ {v_ipi}")
+                    else:
+                        ipi_nt = ipi.find('IPINT')
+                        if ipi_nt is not None:
+                            cst_ipi = ipi_nt.find('CST').text if ipi_nt.find('CST') is not None else 'N/A'
+                            linhas.append(f"[IPI] Não tributado (CST: {cst_ipi} | cEnq: {cEnq})")
+
+                # 5. Extração de PIS e COFINS
+                pis = imposto.find('PIS')
+                cofins = imposto.find('COFINS')
+                pis_part = ""
+                cofins_part = ""
+                if pis is not None:
+                    for p_child in pis:
+                        cst_p = p_child.find('CST').text if p_child.find('CST') is not None else 'N/A'
+                        vbc_p = p_child.find('vBC').text if p_child.find('vBC') is not None else '0.00'
+                        aliq_p = p_child.find('pPIS').text if p_child.find('pPIS') is not None else '0.00'
+                        val_p = p_child.find('vPIS').text if p_child.find('vPIS') is not None else '0.00'
+                        if to_decimal(val_p) > 0 or to_decimal(vbc_p) > 0:
+                            pis_part = f"PIS (CST {cst_p}) -> BC: R$ {vbc_p} | Alíq: {aliq_p}% | Valor: R$ {val_p}"
+                        else:
+                            pis_part = f"PIS (CST {cst_p}) -> Sem destaque"
+                        break
+                if cofins is not None:
+                    for c_child in cofins:
+                        cst_c = c_child.find('CST').text if c_child.find('CST') is not None else 'N/A'
+                        vbc_c = c_child.find('vBC').text if c_child.find('vBC') is not None else '0.00'
+                        aliq_c = c_child.find('pCOFINS').text if c_child.find('pCOFINS') is not None else '0.00'
+                        val_c = c_child.find('vCOFINS').text if c_child.find('vCOFINS') is not None else '0.00'
+                        if to_decimal(val_c) > 0 or to_decimal(vbc_c) > 0:
+                            cofins_part = f"COFINS (CST {cst_c}) -> BC: R$ {vbc_c} | Alíq: {aliq_c}% | Valor: R$ {val_c}"
+                        else:
+                            cofins_part = f"COFINS (CST {cst_c}) -> Sem destaque"
+                        break
+                if pis_part or cofins_part:
+                    linhas.append(f"[PIS/COFINS] {pis_part} | {cofins_part}")
 
             linhas.append("\n")
         
@@ -650,9 +652,7 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                 linhas.append(f"ICMS NORMAL -> Base Total: R$ {vBC_tot} | Valor Total: R$ {vICMS_tot}")
                 linhas.append(f"ICMS ST     -> Base Total ST: R$ {vBCST_tot} | Valor Total ST: R$ {vST_tot}")
                 linhas.append(f"FCP TOTAL   -> FCP Normal: R$ {vFCP_tot} | FCP ST: R$ {vFCPST_tot}")
-                linhas.append(f"IPI TOTAL   -> Valor IPI: R$ {vIPI_tot}")
-                linhas.append(f"PIS/COFINS  -> Total PIS: R$ {vPIS_tot} | Total COFINS: R$ {vCOFINS_tot}")
-            
+
             # Totais da Reforma Tributária (se presentes no grupo total)
             ibscbsTot = total.find('IBSCBSTot')
             if ibscbsTot is not None:
@@ -673,6 +673,10 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
             if isTot is not None:
                 vIS_tot = isTot.find('vIS').text if isTot.find('vIS') is not None else '0.00'
                 linhas.append(f"IMPOSTO SELETIVO   -> Total IS: R$ {vIS_tot}")
+
+            if icmsTot is not None:
+                linhas.append(f"IPI TOTAL   -> Valor IPI: R$ {vIPI_tot}")
+                linhas.append(f"PIS/COFINS  -> Total PIS: R$ {vPIS_tot} | Total COFINS: R$ {vCOFINS_tot}")
                 
             linhas.append("="*80 + "\n")
 

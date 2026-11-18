@@ -29,7 +29,8 @@ Este aplicativo resolve esse gargalo através de:
 * **Detalhamento por Item (Produtos):**
   - Código do item, descrição completa, NCM, CFOP e Unidade de Medida.
   - Quantidade comercial, valor unitário, valor total bruto, frete, seguro e desconto incondicional rateado.
-* **Tributação Tradicional:**
+* **Tributação Tradicional e Reforma (Ordem Padronizada de Conferência):**
+  - **Ordem de Exibição dos Tributos:** `ICMS` (com DIFAL/FCP) $\rightarrow$ `CBS` $\rightarrow$ `IBS UF` $\rightarrow$ `IBS MUN` $\rightarrow$ `IS (Imposto Seletivo)` $\rightarrow$ `IPI` $\rightarrow$ `PIS / COFINS`.
   - **ICMS:** Origem, CST/CSOSN, Base de Cálculo, Alíquota e Valor.
   - **DIFAL:** Alerta automático e cálculo de diferencial de alíquotas para operações interestaduais.
   - **IPI:** CST, código de enquadramento (cEnq), base, alíquota e valor do imposto.
@@ -133,6 +134,7 @@ Cobertura dos testes:
 * `test_08`: Integridade de todas as tabelas de CST (16 de IBS/CBS e 7 de IS).
 * `test_09`: Conformidade com arquivos de homologação oficial da Receita Federal.
 * `test_10`: Tributação monofásica com alíquotas *ad rem* e base quantitativa.
+* `test_11`: Validação rigorosa da ordem sequencial dos tributos (ICMS > CBS > IBS UF > IBS MUN > IS > IPI > PIS/COFINS).
 
 ---
 
