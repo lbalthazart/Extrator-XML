@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext, messagebox
 import os
 import sys
+import re
 from decimal import Decimal, ROUND_HALF_EVEN
 
 # ==============================================================================
@@ -1079,7 +1080,7 @@ def criar_campo_copiavel(parent, valor_str, nome_campo="", width=12, justify="ri
     return e
 
 def renderizar_totais_card(parent_frame, totais_data):
-    """Renderiza os Totais da Nota Fiscal em destaque no topo da tela Datasul."""
+    """Renderiza os Totais da Nota Fiscal ao final da lista de itens, rolando naturalmente junto com a tela."""
     card = tk.LabelFrame(
         parent_frame,
         text="  TOTAIS DA NOTA FISCAL (CONFERÊNCIA & DIGITAÇÃO NO DATASUL)  ",
@@ -1087,11 +1088,11 @@ def renderizar_totais_card(parent_frame, totais_data):
         fg="#1e3a8a",
         bg="#ffffff",
         padx=12,
-        pady=8,
+        pady=10,
         relief="solid",
         bd=1
     )
-    card.pack(fill="x", padx=10, pady=(5, 10))
+    card.pack(fill="x", padx=10, pady=(10, 20))
     
     # Linha 1: Valores Comerciais
     f1 = tk.Frame(card, bg="#ffffff")
@@ -1310,9 +1311,7 @@ def renderizar_item_card(parent_frame, item_data):
         lbl_stat.pack(side="left", padx=2, fill="x", expand=True)
 
 def renderizar_visao_datasul(dados):
-    """Renderiza a Visão Datasul completa (Totais + Cards de Itens com Tabelas)."""
-    for w in frame_totais_conteudo.winfo_children():
-        w.destroy()
+    """Renderiza a Visão Datasul completa (Cards de Itens + Totais ao final, rolando naturalmente)."""
     for w in frame_itens_scroll.winfo_children():
         w.destroy()
         
@@ -1328,9 +1327,6 @@ def renderizar_visao_datasul(dados):
         lbl_aviso.pack()
         return
         
-    # Renderiza Totais
-    renderizar_totais_card(frame_totais_conteudo, dados.get('totais', {}))
-    
     # Título da seção de itens
     lbl_sec = tk.Label(
         frame_itens_scroll,
@@ -1340,15 +1336,96 @@ def renderizar_visao_datasul(dados):
         bg="#f4f6f9",
         pady=4
     )
-    lbl_sec.pack(anchor="w", padx=10, pady=(0, 6))
+    lbl_sec.pack(anchor="w", padx=10, pady=(6, 6))
     
-    # Renderiza cada item
+    # 1. Renderiza cada item
     for item in dados.get('itens', []):
         renderizar_item_card(frame_itens_scroll, item)
+        
+    # 2. Renderiza Totais da Nota Fiscal AO FINAL, rolando junto com os itens (não fixo!)
+    renderizar_totais_card(frame_itens_scroll, dados.get('totais', {}))
         
     # Rola para o topo e seleciona a aba Datasul
     canvas_itens.yview_moveto(0)
     notebook.select(0)
+
+def inserir_texto_com_destaques(widget, texto_completo):
+    """
+    Insere o relatório em modo texto corrido aplicando negrito em todos os valores
+    fiscais, monetários, percentuais e códigos (conforme solicitado pelo usuário).
+    """
+    widget.config(state=tk.NORMAL)
+    widget.delete(1.0, tk.END)
+    
+    widget.tag_config("normal", font=("Consolas", 10), foreground="#2d3748")
+    widget.tag_config("negrito", font=("Consolas", 10, "bold"), foreground="#0f172a")
+    widget.tag_config("titulo", font=("Consolas", 10, "bold"), foreground="#1e3a8a")
+    widget.tag_config("separador", font=("Consolas", 10), foreground="#94a3b8")
+    widget.tag_config("conforme", font=("Consolas", 10, "bold"), foreground="#15803d")
+    widget.tag_config("divergencia", font=("Consolas", 10, "bold"), foreground="#dc2626")
+    
+    # Regex para capturar valores fiscais, monetários (R$), alíquotas (%) e códigos numéricos
+    padrao_valor = re.compile(r'(R\$\s*[\d\.,]+|\b\d+[\.,]\d+%?|\b(?:\d{4,8})\b)')
+    
+    for linha in texto_completo.split('\n'):
+        linha_strip = linha.strip()
+        if not linha_strip:
+            widget.insert(tk.END, "\n")
+            continue
+            
+        # Linhas de divisores e títulos
+        if linha_strip.startswith('===') or linha_strip.startswith('---'):
+            if 'ITEM' in linha:
+                widget.insert(tk.END, linha + "\n", ("titulo",))
+            else:
+                widget.insert(tk.END, linha + "\n", ("separador",))
+            continue
+            
+        if (linha_strip.startswith('DADOS GERAIS') or 
+            linha_strip.startswith('TOTAIS DA NOTA FISCAL') or 
+            linha_strip.startswith('COBRANÇA')):
+            widget.insert(tk.END, linha + "\n", ("titulo",))
+            continue
+            
+        # Linha comum: destaca valores numéricos em negrito
+        pos = 0
+        matches = list(padrao_valor.finditer(linha))
+        for m in matches:
+            start, end = m.start(), m.end()
+            if start > pos:
+                widget.insert(tk.END, linha[pos:start], ("normal",))
+            widget.insert(tk.END, linha[start:end], ("negrito",))
+            pos = end
+        if pos < len(linha):
+            widget.insert(tk.END, linha[pos:] + "\n", ("normal",))
+        else:
+            widget.insert(tk.END, "\n")
+            
+    widget.config(state=tk.DISABLED)
+
+def copiar_valor_do_texto(event):
+    """Permite dar clique duplo em qualquer valor no modo texto corrido para copiar com vírgula."""
+    try:
+        idx = area_texto.index(f"@{event.x},{event.y}")
+        start = area_texto.index(f"{idx} wordstart")
+        end = area_texto.index(f"{idx} wordend")
+        palavra = area_texto.get(start, end).strip()
+        
+        # Se selecionou o 'R$', avança para o número seguinte
+        if palavra == "R$":
+            palavra = area_texto.get(end, f"{end} wordend + 1 word").strip()
+            
+        num_limpo = re.sub(r'[^\d\.,]', '', palavra)
+        if num_limpo:
+            val_fmt = format_datasul(num_limpo)
+            janela.clipboard_clear()
+            janela.clipboard_append(val_fmt)
+            lbl_status_copia.config(
+                text=f"📋 Copiado do texto: {val_fmt} — Pronto para colar no Datasul!",
+                foreground="#15803d"
+            )
+    except Exception:
+        pass
 
 def selecionar_arquivo():
     global chave_xml_atual, dados_nfe_atual
@@ -1381,13 +1458,10 @@ def selecionar_arquivo():
         # Dispara a validação visual da chave
         validar_chave_live()
         
-        # Atualiza o espelho em texto (Aba 2)
-        area_texto.config(state=tk.NORMAL)
-        area_texto.delete(1.0, tk.END)
-        area_texto.insert(tk.END, resultado_texto)
-        area_texto.config(state=tk.DISABLED)
+        # Atualiza o espelho em texto (Aba 2) com formatação em negrito nos valores
+        inserir_texto_com_destaques(area_texto, resultado_texto)
         
-        # Renderiza a Visão Datasul (Aba 1)
+        # Renderiza a Visão Datasul (Aba 1) com Totais ao final rolando naturalmente
         renderizar_visao_datasul(dados_estruturados)
         
         lbl_status_copia.config(
@@ -1415,8 +1489,6 @@ def limpar_tela():
     area_texto.delete(1.0, tk.END)
     area_texto.config(state=tk.DISABLED)
     
-    for w in frame_totais_conteudo.winfo_children():
-        w.destroy()
     for w in frame_itens_scroll.winfo_children():
         w.destroy()
         
@@ -1583,12 +1655,7 @@ tab_texto = ttk.Frame(notebook)
 notebook.add(tab_datasul, text="  🖥️ Tela Datasul (Clique para Copiar)  ")
 notebook.add(tab_texto, text="  📄 Espelho em Texto (Relatório Completo)  ")
 
-# --- CONTEÚDO DA ABA 1: VISÃO DATASUL ---
-# Frame superior fixo para Totais da Nota
-frame_totais_conteudo = tk.Frame(tab_datasul, bg="#f4f6f9")
-frame_totais_conteudo.pack(fill="x", pady=(0, 5))
-
-# Canvas rolável para os Itens da Nota
+# --- CONTEÚDO DA ABA 1: VISÃO DATASUL (TOTAIS AO FINAL ROLANDO NATURALMENTE) ---
 canvas_itens = tk.Canvas(tab_datasul, bg="#f4f6f9", highlightthickness=0)
 vbar_itens = ttk.Scrollbar(tab_datasul, orient="vertical", command=canvas_itens.yview)
 canvas_itens.configure(yscrollcommand=vbar_itens.set)
@@ -1625,7 +1692,7 @@ lbl_placeholder_init = tk.Label(
 )
 lbl_placeholder_init.pack()
 
-# --- CONTEÚDO DA ABA 2: ESPELHO EM TEXTO ---
+# --- CONTEÚDO DA ABA 2: ESPELHO EM TEXTO (COM VALORES EM NEGRITO) ---
 area_texto = scrolledtext.ScrolledText(
     tab_texto,
     wrap=tk.WORD,
@@ -1638,6 +1705,7 @@ area_texto = scrolledtext.ScrolledText(
 )
 area_texto.pack(expand=True, fill='both')
 area_texto.config(state=tk.DISABLED)
+area_texto.bind("<Double-Button-1>", copiar_valor_do_texto)
 
 # --- BARRA DE STATUS INFERIOR ---
 frame_status = tk.Frame(janela, bg="#e2e8f0", padx=15, pady=6)
