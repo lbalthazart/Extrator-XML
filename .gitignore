@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# PyInstaller / Build Artifacts
+build/
+dist/
+*.manifest
+
+# Backups e Arquivos Temporários
+*.bak
+*backup*.py
+*.tmp
+*.log
+.DS_Store
+Thumbs.db
+
+# Configurações de IDE e Ambiente Local
+.vscode/
+.idea/
+*.swp
+.env
