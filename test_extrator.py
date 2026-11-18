@@ -8,6 +8,9 @@ from extrator_nfe import (
     calcular_tributo_rtc_oficial,
     to_decimal,
     format_moeda_raw,
+    format_datasul,
+    format_datasul_aliq,
+    format_datasul_qtd,
     CST_IBS_CBS_DESCRICAO,
     CST_IS_DESCRICAO
 )
@@ -466,6 +469,81 @@ class TestExtratorNFe(unittest.TestCase):
             self.assertTrue(pos_ibs_mun < pos_is, f"IBS MUN ({pos_ibs_mun}) deve vir antes de IS ({pos_is})")
             self.assertTrue(pos_is < pos_ipi, f"IS ({pos_is}) deve vir antes de IPI ({pos_ipi})")
             self.assertTrue(pos_ipi < pos_pis_cofins, f"IPI ({pos_ipi}) deve vir antes de PIS/COFINS ({pos_pis_cofins})")
+        finally:
+            os.remove(temp_path)
+
+    def test_12_visao_datasul_campos_virgula(self):
+        """Valida que os valores para cópia no Datasul usem vírgula, sem ponto de milhar, e mantenham ordem estrita."""
+        # 1. Validação de formatação monetária padrão Datasul
+        self.assertEqual(format_datasul("1040.00"), "1040,00")
+        self.assertEqual(format_datasul("180.00"), "180,00")
+        self.assertEqual(format_datasul("0.50"), "0,50")
+        self.assertEqual(format_datasul("12500.75"), "12500,75")
+        self.assertEqual(format_datasul_aliq("18.00"), "18,00")
+        self.assertEqual(format_datasul_aliq("0.90"), "0,90")
+        self.assertEqual(format_datasul_qtd("100.0000"), "100")
+        self.assertEqual(format_datasul_qtd("10.5000"), "10,5")
+
+        # 2. Validação da estrutura de dados para renderização Datasul
+        xml_content = """<?xml version="1.0" encoding="UTF-8"?>
+        <NFe xmlns="http://www.portalfiscal.inf.br/nfe">
+            <infNFe Id="NFe35261100000000000191550010000001231000001234">
+                <ide><nNF>999</nNF><serie>1</serie></ide>
+                <emit><xNome>TESTE DATASUL</xNome></emit>
+                <det nItem="1">
+                    <prod>
+                        <cProd>P01</cProd>
+                        <xProd>PRODUTO TESTE</xProd>
+                        <NCM>84713012</NCM>
+                        <CFOP>5102</CFOP>
+                        <uCom>UN</uCom>
+                        <qCom>10.0000</qCom>
+                        <vUnCom>100.0000</vUnCom>
+                        <vProd>1000.00</vProd>
+                    </prod>
+                    <imposto>
+                        <ICMS><ICMS00><orig>0</orig><CST>00</CST><vBC>1000.00</vBC><pICMS>18.00</pICMS><vICMS>180.00</vICMS></ICMS00></ICMS>
+                        <IPI><cEnq>999</cEnq><IPITrib><CST>50</CST><vBC>1000.00</vBC><pIPI>5.00</pIPI><vIPI>50.00</vIPI></IPITrib></IPI>
+                        <PIS><PISAliq><CST>01</CST><vBC>1000.00</vBC><pPIS>1.65</pPIS><vPIS>16.50</vPIS></PISAliq></PIS>
+                        <COFINS><COFINSAliq><CST>01</CST><vBC>1000.00</vBC><pCOFINS>7.60</pCOFINS><vCOFINS>76.00</vCOFINS></COFINSAliq></COFINS>
+                        <IS><CST>000</CST><cClassTrib>000001</cClassTrib><vBC>1000.00</vBC><pIS>2.00</pIS><vIS>20.00</vIS></IS>
+                        <IBSCBS>
+                            <CST>000</CST><cClassTrib>000001</cClassTrib>
+                            <gIBSCBS>
+                                <vBC>1000.00</vBC>
+                                <gIBSUF><pIBSUF>0.05</pIBSUF><vIBSUF>0.50</vIBSUF></gIBSUF>
+                                <gIBSMun><pIBSMun>0.05</pIBSMun><vIBSMun>0.50</vIBSMun></gIBSMun>
+                                <gCBS><pCBS>0.90</pCBS><vCBS>9.00</vCBS></gCBS>
+                            </gIBSCBS>
+                        </IBSCBS>
+                    </imposto>
+                </det>
+            </infNFe>
+        </NFe>
+        """
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False, encoding='utf-8') as f:
+            f.write(xml_content)
+            temp_path = f.name
+        
+        try:
+            texto, chave, dados = extrair_dados_xml(temp_path, retornar_estruturado=True)
+            self.assertEqual(len(dados['itens']), 1)
+            item = dados['itens'][0]
+            self.assertEqual(item['cProd'], 'P01')
+            
+            # Valida ordem dos impostos no objeto estruturado: ICMS > CBS > IBS UF > IBS MUN > IS > IPI > PIS > COFINS
+            tribs = [imp['tributo'] for imp in item['impostos']]
+            self.assertEqual(tribs, ['ICMS', 'CBS', 'IBS UF', 'IBS MUN', 'IS', 'IPI', 'PIS', 'COFINS'])
+            
+            # Valida que valores podem ser formatados para o Datasul com vírgula
+            icms_obj = item['impostos'][0]
+            self.assertEqual(format_datasul(icms_obj['valor']), '180,00')
+            self.assertEqual(format_datasul(icms_obj['base']), '1000,00')
+            self.assertEqual(format_datasul_aliq(icms_obj['aliq']), '18,00')
+            
+            cbs_obj = item['impostos'][1]
+            self.assertEqual(format_datasul(cbs_obj['valor']), '9,00')
+            self.assertEqual(format_datasul_aliq(cbs_obj['aliq']), '0,90')
         finally:
             os.remove(temp_path)
 

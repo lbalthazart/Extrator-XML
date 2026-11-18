@@ -23,19 +23,15 @@ Este aplicativo resolve esse gargalo através de:
 
 ## ✨ Principais Funcionalidades
 
-### 1. Extração Completa para Implantação Datasul
-* **Identificação e Cabeçalho:** Chave de acesso de 44 dígitos, número da nota, série, data de emissão, dados do emitente e do destinatário (com CNPJ/CPF e UF).
-* **Duplicatas e Condição de Pagamento:** Detalhamento de número da parcela, data de vencimento e valor líquido.
-* **Detalhamento por Item (Produtos):**
-  - Código do item, descrição completa, NCM, CFOP e Unidade de Medida.
-  - Quantidade comercial, valor unitário, valor total bruto, frete, seguro e desconto incondicional rateado.
-* **Tributação Tradicional e Reforma (Ordem Padronizada de Conferência):**
-  - **Ordem de Exibição dos Tributos:** `ICMS` (com DIFAL/FCP) $\rightarrow$ `CBS` $\rightarrow$ `IBS UF` $\rightarrow$ `IBS MUN` $\rightarrow$ `IS (Imposto Seletivo)` $\rightarrow$ `IPI` $\rightarrow$ `PIS / COFINS`.
-  - **ICMS:** Origem, CST/CSOSN, Base de Cálculo, Alíquota e Valor.
-  - **DIFAL:** Alerta automático e cálculo de diferencial de alíquotas para operações interestaduais.
-  - **IPI:** CST, código de enquadramento (cEnq), base, alíquota e valor do imposto.
-  - **PIS / COFINS:** CST de entrada/saída, base de cálculo e alíquotas.
-* **Totais da Nota Fiscal:** Batimento integral de `vProd`, `vNF`, `vBC`, `vICMS`, `vBCST`, `vST`, `vFCP`, `vIPI`, `vPIS`, `vCOFINS` para conciliação direta com a tela de recebimento do ERP.
+### 1. Visão Datasul Otimizada (Clique para Copiar com Vírgula)
+* **Padrão Visual do ERP:** Interface desenhada no modelo operacional do TOTVS Datasul, com títulos de tributos estáticos ("escritos chapados") e valores em **negrito**.
+* **1 Clique para Copiar:** Dê 1 clique sobre qualquer número (Base de Cálculo, Alíquota, Valor, NCM, CFOP ou Totais) para copiá-lo instantaneamente para a área de transferência.
+* **Formatação Compatível com Datasul:** Todos os números são copiados **com vírgula** decimal e **sem ponto de milhar** (ex: `1250,50` e `180,00`), evitando conflitos com as máscaras nativas de campos numéricos do Progress 4GL.
+* **Feedback Visual Instantâneo:** Ao clicar em um valor, o campo pisca em verde suave (`#bbf7d0`) e a barra de status inferior confirma o dado copiado.
+* **Cards Destacados por Item:** Divisão clara entre itens com barra de identificação azul, linha de dados cadastrais (Cód, NCM, CFOP, Qtd, Vl Unit, Total) e grade de tributos.
+* **Totais da Nota em Destaque:** Painel superior com conciliação imediata de valores comerciais e fiscais antes de auditar os itens.
+* **Espelho em Texto (Aba 2):** Aba dedicada que preserva o relatório textual corrido completo com o botão **📋 Copiar Espelho Completo (Texto)**.
+* **Ordem Padronizada dos Tributos:** `ICMS` (com DIFAL/ST/FCP) $\rightarrow$ `CBS` $\rightarrow$ `IBS UF` $\rightarrow$ `IBS MUN` $\rightarrow$ `IS (Imposto Seletivo)` $\rightarrow$ `IPI` $\rightarrow$ `PIS / COFINS`.
 
 ### 2. Motor Oficial de Auditoria RTC (Reforma Tributária)
 * **Base de Cálculo Unificada (Art. 349 da LC 214/2025):**
@@ -79,7 +75,7 @@ Este aplicativo resolve esse gargalo através de:
 
 ```text
 ├── extrator_nfe.py           # Código-fonte principal com GUI e motor fiscal RTC
-├── test_extrator.py          # Bateria completa de 10 testes unitários automatizados
+├── test_extrator.py          # Bateria completa de 12 testes unitários automatizados
 ├── Extrator_NFe_Datasul.spec # Especificação técnica do PyInstaller para build
 ├── file_version_info.txt     # Metadados de versão do Windows PE (Balthazar IA v1.2)
 ├── app_icon.ico              # Ícone desktop em alta resolução (.ico com múltiplos canais)
@@ -135,6 +131,7 @@ Cobertura dos testes:
 * `test_09`: Conformidade com arquivos de homologação oficial da Receita Federal.
 * `test_10`: Tributação monofásica com alíquotas *ad rem* e base quantitativa.
 * `test_11`: Validação rigorosa da ordem sequencial dos tributos (ICMS > CBS > IBS UF > IBS MUN > IS > IPI > PIS/COFINS).
+* `test_12`: Validação da formatação padrão Datasul (vírgula decimal sem ponto de milhar) e estrutura de dados da Visão Datasul.
 
 ---
 

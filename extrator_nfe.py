@@ -74,6 +74,41 @@ def format_moeda_raw(dec_val):
     except Exception:
         return "0.00"
 
+def format_datasul(val):
+    """
+    Formata valor para digitação no TOTVS Datasul:
+    - Com vírgula para decimais (ex: 1250,50 ou 18,00)
+    - Sem ponto de milhar para evitar conflitos com a máscara de campo do Progress/Datasul
+    """
+    if val is None or val == '' or val == '-':
+        return "-"
+    try:
+        d = to_decimal(val).quantize(PRECISAO_MOEDA, rounding=ROUND_HALF_EVEN)
+        return f"{d:.2f}".replace('.', ',')
+    except Exception:
+        return str(val).replace('.', ',')
+
+def format_datasul_aliq(val):
+    """Formata alíquota com vírgula para o Datasul (ex: 18,00 ou 0,90)."""
+    if val is None or val == '' or val == '-':
+        return "-"
+    try:
+        d = to_decimal(val)
+        return f"{d}".replace('.', ',')
+    except Exception:
+        return str(val).replace('.', ',')
+
+def format_datasul_qtd(val):
+    """Formata quantidade sem ponto de milhar e com vírgula."""
+    if val is None or val == '' or val == '-':
+        return "-"
+    try:
+        d = to_decimal(val)
+        s = f"{d:.4f}".rstrip('0').rstrip('.')
+        return s.replace('.', ',') if s else "0"
+    except Exception:
+        return str(val).replace('.', ',')
+
 def calcular_base_unificada_rtc_oficial(vProd, vFrete, vSeg, vOutro, vII, vIS, vDesc, vICMS, vPIS, vCOFINS, vFCP, vISS, ano=2026):
     """
     Calcula a Base de Cálculo Unificada do IBS/CBS segundo a Lei Complementar 214/2025 (Art. 349)
@@ -136,8 +171,9 @@ def calcular_tributo_rtc_oficial(base_calc, aliq_nominal, red_aliq=Decimal('0'),
     aliq_efetiva_apres = aliq_efetiva.quantize(PRECISAO_ALIQUOTA, rounding=ROUND_HALF_EVEN)
     return aliq_efetiva_apres, tributo_devido
 
-# Variável global para manter a chave lida do XML e permitir validação em tempo real
+# Variáveis globais de controle
 chave_xml_atual = ""
+dados_nfe_atual = {}
 
 def remove_namespace(doc, namespace):
     """Remove o namespace do XML para facilitar a busca pelas tags."""
@@ -147,7 +183,7 @@ def remove_namespace(doc, namespace):
         if elem.tag.startswith(ns):
             elem.tag = elem.tag[nsl:]
 
-def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_informada=0.0, aliq_icms_informada=0.0, aliq_cbs_padrao=0.9, aliq_ibs_padrao=0.1):
+def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_informada=0.0, aliq_icms_informada=0.0, aliq_cbs_padrao=0.9, aliq_ibs_padrao=0.1, retornar_estruturado=False):
     try:
         # Conversão segura de alíquotas opcionais
         try:
@@ -164,6 +200,7 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
             aliq_icms_informada = float(str(aliq_icms_informada).replace(',', '.')) if aliq_icms_informada else 0.0
         except Exception:
             aliq_icms_informada = 0.0
+
         tree = ET.parse(caminho_arquivo)
         root = tree.getroot()
         
@@ -174,6 +211,8 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
             
         infNFe = root.find('.//infNFe')
         if infNFe is None:
+            if retornar_estruturado:
+                return "Erro: O arquivo selecionado não parece ser um XML de NF-e válido.", "", {}
             return "Erro: O arquivo selecionado não parece ser um XML de NF-e válido.", ""
 
         # Extração da Chave de Acesso do XML (Removendo o prefixo 'NFe')
@@ -214,6 +253,17 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
         linhas.append(f"DATA DE EMISSÃO: {dhEmi}")
         linhas.append("="*80)
 
+        # Estrutura completa de dados para a interface estilo Datasul
+        dados_estruturados = {
+            'chave': chave_xml,
+            'ide': {'nNF': nNF, 'serie': serie, 'dhEmi': dhEmi},
+            'emit': {'xNome': xNome, 'cnpj': cnpj},
+            'dest': {'xNome': dest_nome, 'doc': dest_doc, 'uf': dest_uf},
+            'parcelas': [],
+            'totais': {},
+            'itens': []
+        }
+
         # --- DADOS DE COBRANÇA E PARCELAS (CONDIÇÃO DE PAGAMENTO DATASUL) ---
         cobr = infNFe.find('cobr')
         if cobr is not None:
@@ -232,6 +282,7 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                     nDup = dup.find('nDup').text if dup.find('nDup') is not None else 'N/A'
                     vDup = dup.find('vDup').text if dup.find('vDup') is not None else '0.00'
                     lista_dups.append(f"Parc. {nDup}: R$ {vDup}")
+                    dados_estruturados['parcelas'].append({'nDup': nDup, 'vDup': vDup})
                 
                 linhas.append(" | ".join(lista_dups))
                 linhas.append("-" * 80)
@@ -263,6 +314,23 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
             linhas.append(f"NCM: {ncm} | CFOP: {cfop} | Unid: {uCom}")
             linhas.append(f"Qtde: {qCom} | Vlr Unit: R$ {vUnCom} | Vlr Total: R$ {vProd}")
             
+            item_obj = {
+                'num': nItem,
+                'cProd': cProd,
+                'xProd': xProd,
+                'ncm': ncm,
+                'cfop': cfop,
+                'uCom': uCom,
+                'qCom': qCom,
+                'vUnCom': vUnCom,
+                'vProd': vProd,
+                'vFrete': vFrete,
+                'vSeg': vSeg,
+                'vDesc': vDesc,
+                'vOutro': vOutro,
+                'impostos': []
+            }
+
             # Exibe componentes se algum estiver presente
             comp_txt = []
             if to_decimal(vFrete) > 0: comp_txt.append(f"Frete: R$ {vFrete}")
@@ -277,12 +345,14 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
             if imposto is not None:
                 # 1. Extração de ICMS (Normal, ST e FCP ST)
                 icms = imposto.find('ICMS')
+                cst_icms_salvo = 'N/A'
                 if icms is not None:
                     for child in icms: 
                         cst = child.find('CST') if child.find('CST') is not None else child.find('CSOSN')
                         orig = child.find('orig')
                         
                         cst_txt = cst.text if cst is not None else 'N/A'
+                        cst_icms_salvo = cst_txt
                         orig_txt = orig.text if orig is not None else '0'
                         linhas.append(f"[ICMS] Origem: {orig_txt} | CST/CSOSN: {cst_txt}")
                         
@@ -296,16 +366,48 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                             aliq = pICMS.text if pICMS is not None else '0.00'
                             vlr = vICMS.text if vICMS is not None else '0.00'
                             linhas.append(f"       ICMS Normal -> BC: {vbc_val} | Alíq: {aliq}% | Valor: {vlr}")
+                            item_obj['impostos'].append({
+                                'tributo': 'ICMS',
+                                'cst': cst_txt,
+                                'base': vbc_val,
+                                'aliq': aliq,
+                                'valor': vlr,
+                                'status': f"Origem: {orig_txt}"
+                            })
                         else:
                             try:
                                 base_calc = float(vProd) if vProd else 0.0
                                 if aliq_icms_informada > 0:
                                     valor_icms_calc = base_calc * (aliq_icms_informada / 100)
                                     linhas.append(f"       ICMS Normal -> [CÁLC. PRESUMIDO] BC: {base_calc:.2f} | Alíq (Tela): {aliq_icms_informada:.2f}% | Valor: {valor_icms_calc:.2f}")
+                                    item_obj['impostos'].append({
+                                        'tributo': 'ICMS',
+                                        'cst': cst_txt,
+                                        'base': f"{base_calc:.2f}",
+                                        'aliq': f"{aliq_icms_informada:.2f}",
+                                        'valor': f"{valor_icms_calc:.2f}",
+                                        'status': 'Cálc. Presumido (Tela)'
+                                    })
                                 else:
                                     linhas.append(f"       ICMS Normal -> Não destacado no XML (Preenchimento Manual)")
+                                    item_obj['impostos'].append({
+                                        'tributo': 'ICMS',
+                                        'cst': cst_txt,
+                                        'base': '0.00',
+                                        'aliq': '0.00',
+                                        'valor': '0.00',
+                                        'status': 'Não destacado'
+                                    })
                             except Exception:
                                 linhas.append(f"       ICMS Normal -> Não destacado no XML (Preenchimento Manual)")
+                                item_obj['impostos'].append({
+                                    'tributo': 'ICMS',
+                                    'cst': cst_txt,
+                                    'base': '0.00',
+                                    'aliq': '0.00',
+                                    'valor': '0.00',
+                                    'status': 'Não destacado'
+                                })
                         
                         # FCP Normal
                         vBCFCP = child.find('vBCFCP')
@@ -317,6 +419,15 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                             aliq_fcp = pFCP.text if pFCP is not None else '0.00'
                             val_fcp = vFCP.text if vFCP is not None else '0.00'
                             linhas.append(f"       FCP Normal  -> BC FCP: {bc_fcp} | Alíq FCP: {aliq_fcp}% | Valor FCP: {val_fcp}")
+                            if to_decimal(val_fcp) > 0 or to_decimal(bc_fcp) > 0:
+                                item_obj['impostos'].append({
+                                    'tributo': 'FCP Normal',
+                                    'cst': cst_txt,
+                                    'base': bc_fcp,
+                                    'aliq': aliq_fcp,
+                                    'valor': val_fcp,
+                                    'status': 'Fundo Combate Pobreza'
+                                })
 
                         # Crédito Simples Nacional
                         pCred = child.find('pCredSN')
@@ -338,6 +449,15 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                             val_st = vICMSST.text if vICMSST is not None else '0'
                             mva_st = pMVAST.text if pMVAST is not None else '0'
                             linhas.append(f"       ICMS ST     -> MVA: {mva_st}% | BC ST: {bc_st} | Alíq ST: {aliq_st}% | Valor ST: {val_st}")
+                            if to_decimal(val_st) > 0 or to_decimal(bc_st) > 0:
+                                item_obj['impostos'].append({
+                                    'tributo': 'ICMS ST',
+                                    'cst': cst_txt,
+                                    'base': bc_st,
+                                    'aliq': aliq_st,
+                                    'valor': val_st,
+                                    'status': f"MVA: {mva_st}%"
+                                })
                         
                         # FCP ST
                         vBCFCPST = child.find('vBCFCPST')
@@ -349,8 +469,26 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                             aliq_fcpst = pFCPST.text if pFCPST is not None else '0'
                             val_fcpst = vFCPST.text if vFCPST is not None else '0'
                             linhas.append(f"       FCP ST      -> BC FCP ST: {bc_fcpst} | Alíq FCP ST: {aliq_fcpst}% | Valor FCP ST: {val_fcpst}")
+                            if to_decimal(val_fcpst) > 0:
+                                item_obj['impostos'].append({
+                                    'tributo': 'FCP ST',
+                                    'cst': cst_txt,
+                                    'base': bc_fcpst,
+                                    'aliq': aliq_fcpst,
+                                    'valor': val_fcpst,
+                                    'status': 'FCP Subst. Tributária'
+                                })
+                else:
+                    item_obj['impostos'].append({
+                        'tributo': 'ICMS',
+                        'cst': 'N/A',
+                        'base': '0.00',
+                        'aliq': '0.00',
+                        'valor': '0.00',
+                        'status': 'Não destacado'
+                    })
 
-                # 2. Extração de DIFAL (ICMSUFDest) ou Cálculo Presumido
+                # Extração de DIFAL (ICMSUFDest) ou Cálculo Presumido
                 icms_uf_dest = imposto.find('ICMSUFDest')
                 if icms_uf_dest is not None:
                     vbc_uf_dest = icms_uf_dest.find('vBCUFDest').text if icms_uf_dest.find('vBCUFDest') is not None else '0.00'
@@ -360,6 +498,14 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                     
                     linhas.append(f"       DIFAL       -> BC: {vbc_uf_dest} | Alíq Inter: {p_icms_inter}% | Alíq Dest ({dest_uf}): {p_icms_uf_dest}%")
                     linhas.append(f"       (Lançar no Datasul -> Base ICMS Compl.: {vbc_uf_dest} | Valor ICMS Compl.: {v_icms_uf_dest})")
+                    item_obj['impostos'].append({
+                        'tributo': 'DIFAL',
+                        'cst': '-',
+                        'base': vbc_uf_dest,
+                        'aliq': f"{p_icms_uf_dest}-{p_icms_inter}",
+                        'valor': v_icms_uf_dest,
+                        'status': f"UF Destino: {dest_uf}"
+                    })
                 elif cfop.startswith('6'):
                     try:
                         base_difal = 0.0
@@ -389,6 +535,14 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                                 valor_difal = base_difal * ((aliq_interna_informada - aliq_inter) / 100)
                                 linhas.append(f"       DIFAL       -> [CÁLC. PRESUMIDO] BC: {base_difal:.2f} | Alíq Inter ({origem_aliq}): {aliq_inter:.2f}% | Alíq Int {dest_uf}: {aliq_interna_informada:.2f}%")
                                 linhas.append(f"       (Lançar no Datasul -> Base ICMS Compl.: {base_difal:.2f} | Valor ICMS Compl.: {valor_difal:.2f})")
+                                item_obj['impostos'].append({
+                                    'tributo': 'DIFAL (Presum.)',
+                                    'cst': '-',
+                                    'base': f"{base_difal:.2f}",
+                                    'aliq': f"{aliq_interna_informada:.2f}-{aliq_inter:.2f}",
+                                    'valor': f"{valor_difal:.2f}",
+                                    'status': f"Presumido Destino {dest_uf}"
+                                })
                             else:
                                 linhas.append(f"       DIFAL       -> ATENÇÃO: Alíquota interestadual ({aliq_inter}%) é maior ou igual à interna informada ({aliq_interna_informada}%).")
                         else:
@@ -447,7 +601,7 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                         
                         def auditar_tributo(elemento, tag_aliq, tag_valor, nome_tributo):
                             if elemento is None:
-                                return ""
+                                return "", {}
                             p_nom = elemento.find(tag_aliq).text if elemento.find(tag_aliq) is not None else '0'
                             v_xml_str = elemento.find(tag_valor).text if elemento.find(tag_valor) is not None else '0'
                             v_xml = to_decimal(v_xml_str)
@@ -473,8 +627,10 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                             dif = abs(v_xml - v_oficial)
                             if dif <= Decimal('0.01'):
                                 status = "[Auditoria RFB: ✔️ Conforme]"
+                                status_curto = "✔️ Conforme"
                             else:
                                 status = f"[Auditoria RFB: ⚠️ Divergência! XML: R$ {format_moeda_raw(v_xml)} vs Oficial: R$ {format_moeda_raw(v_oficial)}]"
+                                status_curto = f"⚠️ Divergência! (Oficial: R$ {format_moeda_raw(v_oficial)})"
                                 
                             detalhes = []
                             if gred is not None:
@@ -490,20 +646,35 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                                 detalhes.append(f"Devolução: R$ {v_dev_trib}")
                             
                             det_str = (" | " + " | ".join(detalhes)) if detalhes else ""
-                            return f"          [{nome_tributo}] Alíq: {p_nom}%{det_str} | Valor: R$ {format_moeda_raw(v_xml)} {status}"
+                            linha_texto = f"          [{nome_tributo}] Alíq: {p_nom}%{det_str} | Valor: R$ {format_moeda_raw(v_xml)} {status}"
+                            info_dict = {
+                                'tributo': nome_tributo,
+                                'cst': cst_ibscbs,
+                                'base': vBC_ibscbs_str,
+                                'aliq': p_nom,
+                                'valor': v_xml_str,
+                                'status': status_curto
+                            }
+                            return linha_texto, info_dict
 
                         # ORDEM SOLICITADA: CBS > IBS UF > IBS MUN
                         gCBS = gIBSCBS.find('gCBS')
                         if gCBS is not None:
-                            linhas.append(auditar_tributo(gCBS, 'pCBS', 'vCBS', 'CBS'))
+                            lt, idict = auditar_tributo(gCBS, 'pCBS', 'vCBS', 'CBS')
+                            linhas.append(lt)
+                            item_obj['impostos'].append(idict)
 
                         gIBSUF = gIBSCBS.find('gIBSUF')
                         if gIBSUF is not None:
-                            linhas.append(auditar_tributo(gIBSUF, 'pIBSUF', 'vIBSUF', 'IBS UF'))
+                            lt, idict = auditar_tributo(gIBSUF, 'pIBSUF', 'vIBSUF', 'IBS UF')
+                            linhas.append(lt)
+                            item_obj['impostos'].append(idict)
                             
                         gIBSMun = gIBSCBS.find('gIBSMun')
                         if gIBSMun is not None:
-                            linhas.append(auditar_tributo(gIBSMun, 'pIBSMun', 'vIBSMun', 'IBS MUN'))
+                            lt, idict = auditar_tributo(gIBSMun, 'pIBSMun', 'vIBSMun', 'IBS MUN')
+                            linhas.append(lt)
+                            item_obj['impostos'].append(idict)
 
                     gIBSCBSMono = ibscbs.find('gIBSCBSMono')
                     if gIBSCBSMono is not None:
@@ -528,9 +699,49 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                         # ORDEM: CBS > IBS
                         linhas.append(f"          [MONOFASIA] adRem CBS: R$ {adRemCBS_str} | vCBS: R$ {vCBSMono_str} [Auditoria RFB: {st_cbs}]")
                         linhas.append(f"          [MONOFASIA] Qtd BC: {qBCMono_str} | adRem IBS: R$ {adRemIBS_str} | vIBS: R$ {vIBSMono_str} [Auditoria RFB: {st_ibs}]")
+                        item_obj['impostos'].append({
+                            'tributo': 'CBS (Mono)',
+                            'cst': cst_ibscbs,
+                            'base': qBCMono_str,
+                            'aliq': adRemCBS_str,
+                            'valor': vCBSMono_str,
+                            'status': st_cbs
+                        })
+                        item_obj['impostos'].append({
+                            'tributo': 'IBS (Mono)',
+                            'cst': cst_ibscbs,
+                            'base': qBCMono_str,
+                            'aliq': adRemIBS_str,
+                            'valor': vIBSMono_str,
+                            'status': st_ibs
+                        })
                     elif gIBSCBS is None:
                         if cst_ibscbs in ('400', '410', '550', '800', '810', '820', '830'):
                             linhas.append(f"          [Auditoria RFB: ✔️ Desonerado / Sem débito de tributo conforme CST {cst_ibscbs}]")
+                            item_obj['impostos'].append({
+                                'tributo': 'CBS',
+                                'cst': cst_ibscbs,
+                                'base': '0.00',
+                                'aliq': '0.00',
+                                'valor': '0.00',
+                                'status': 'Desonerado / Sem débito'
+                            })
+                            item_obj['impostos'].append({
+                                'tributo': 'IBS UF',
+                                'cst': cst_ibscbs,
+                                'base': '0.00',
+                                'aliq': '0.00',
+                                'valor': '0.00',
+                                'status': 'Desonerado / Sem débito'
+                            })
+                            item_obj['impostos'].append({
+                                'tributo': 'IBS MUN',
+                                'cst': cst_ibscbs,
+                                'base': '0.00',
+                                'aliq': '0.00',
+                                'valor': '0.00',
+                                'status': 'Desonerado / Sem débito'
+                            })
                 else:
                     aliq_cbs_dec = to_decimal(aliq_cbs_padrao)
                     aliq_ibs_dec = to_decimal(aliq_ibs_padrao)
@@ -545,6 +756,32 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                     linhas.append(f"[IBS/CBS] Não destacado no XML [SIMULAÇÃO RTC TRANSIÇÃO OFICIAL]")
                     linhas.append(f"          Base Unificada: R$ {format_moeda_raw(base_unificada_oficial)} | CBS ({aliq_cbs_padrao:.2f}%): R$ {format_moeda_raw(v_cbs_simul)}")
                     linhas.append(f"          IBS ({aliq_ibs_padrao:.2f}%): R$ {format_moeda_raw(v_ibs_tot_simul)} (UF: R$ {format_moeda_raw(v_ibs_uf_simul)} | Mun: R$ {format_moeda_raw(v_ibs_mun_simul)})")
+                    
+                    base_simul_str = format_moeda_raw(base_unificada_oficial)
+                    item_obj['impostos'].append({
+                        'tributo': 'CBS (Simul.)',
+                        'cst': 'Simul.',
+                        'base': base_simul_str,
+                        'aliq': f"{aliq_cbs_padrao:.2f}",
+                        'valor': format_moeda_raw(v_cbs_simul),
+                        'status': 'Simulação Art. 349 (Transição)'
+                    })
+                    item_obj['impostos'].append({
+                        'tributo': 'IBS UF (Simul.)',
+                        'cst': 'Simul.',
+                        'base': base_simul_str,
+                        'aliq': f"{aliq_ibs_uf:.2f}",
+                        'valor': format_moeda_raw(v_ibs_uf_simul),
+                        'status': 'Simulação Art. 349'
+                    })
+                    item_obj['impostos'].append({
+                        'tributo': 'IBS MUN (Simul.)',
+                        'cst': 'Simul.',
+                        'base': base_simul_str,
+                        'aliq': f"{aliq_ibs_mun:.2f}",
+                        'valor': format_moeda_raw(v_ibs_mun_simul),
+                        'status': 'Simulação Art. 349'
+                    })
 
                 # 3. Extração e Auditoria Oficial de Imposto Seletivo (IS)
                 is_node = imposto.find('IS')
@@ -560,16 +797,37 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                     vBC_is_val = to_decimal(vBC_is)
                     pIS_val = to_decimal(pIS)
                     status_is = ""
+                    status_is_curto = ""
                     if vBC_is_val > 0 and pIS_val > 0:
                         v_is_oficial = (vBC_is_val * (pIS_val / Decimal('100'))).quantize(PRECISAO_MOEDA, rounding=ROUND_HALF_EVEN)
                         if abs(vIS_val - v_is_oficial) <= Decimal('0.01'):
                             status_is = " [Auditoria RFB: ✔️ Conforme]"
+                            status_is_curto = "✔️ Conforme"
                         else:
                             status_is = f" [Auditoria RFB: ⚠️ Divergência! XML: R$ {format_moeda_raw(vIS_val)} vs Oficial: R$ {format_moeda_raw(v_is_oficial)}]"
+                            status_is_curto = f"⚠️ Divergência! (Oficial: R$ {format_moeda_raw(v_is_oficial)})"
                     elif cst_is in ('100', '200', '400', '500', '600') and vIS_val == 0:
                         status_is = " [Auditoria RFB: ✔️ Conforme (Sem incidência/Zero)]"
+                        status_is_curto = "✔️ Sem incidência/Zero"
 
                     linhas.append(f"[IMPOSTO SELETIVO] CST: {cst_is} ({cst_is_desc}) | cClassTrib: {cClassTrib_is} | BC: R$ {vBC_is} | Alíq: {pIS}% | Valor: R$ {vIS}{status_is}")
+                    item_obj['impostos'].append({
+                        'tributo': 'IS',
+                        'cst': cst_is,
+                        'base': vBC_is,
+                        'aliq': pIS,
+                        'valor': vIS,
+                        'status': status_is_curto if status_is_curto else f"cClass: {cClassTrib_is}"
+                    })
+                else:
+                    item_obj['impostos'].append({
+                        'tributo': 'IS',
+                        'cst': '-',
+                        'base': '0.00',
+                        'aliq': '0.00',
+                        'valor': '0.00',
+                        'status': 'Não destacado'
+                    })
 
                 # 4. Extração de IPI (Imposto sobre Produtos Industrializados)
                 ipi = imposto.find('IPI')
@@ -582,17 +840,45 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                         p_ipi = ipi_trib.find('pIPI').text if ipi_trib.find('pIPI') is not None else '0.00'
                         v_ipi = ipi_trib.find('vIPI').text if ipi_trib.find('vIPI') is not None else '0.00'
                         linhas.append(f"[IPI] CST: {cst_ipi} | cEnq: {cEnq} | BC: R$ {vbc_ipi} | Alíq: {p_ipi}% | Valor: R$ {v_ipi}")
+                        item_obj['impostos'].append({
+                            'tributo': 'IPI',
+                            'cst': cst_ipi,
+                            'base': vbc_ipi,
+                            'aliq': p_ipi,
+                            'valor': v_ipi,
+                            'status': f"cEnq: {cEnq}" if cEnq else "Tributado"
+                        })
                     else:
                         ipi_nt = ipi.find('IPINT')
                         if ipi_nt is not None:
                             cst_ipi = ipi_nt.find('CST').text if ipi_nt.find('CST') is not None else 'N/A'
                             linhas.append(f"[IPI] Não tributado (CST: {cst_ipi} | cEnq: {cEnq})")
+                            item_obj['impostos'].append({
+                                'tributo': 'IPI',
+                                'cst': cst_ipi,
+                                'base': '0.00',
+                                'aliq': '0.00',
+                                'valor': '0.00',
+                                'status': f"Não tributado (cEnq {cEnq})"
+                            })
+                else:
+                    item_obj['impostos'].append({
+                        'tributo': 'IPI',
+                        'cst': '-',
+                        'base': '0.00',
+                        'aliq': '0.00',
+                        'valor': '0.00',
+                        'status': 'Não destacado'
+                    })
 
                 # 5. Extração de PIS e COFINS
                 pis = imposto.find('PIS')
                 cofins = imposto.find('COFINS')
                 pis_part = ""
                 cofins_part = ""
+                pis_info = {'tributo': 'PIS', 'cst': '-', 'base': '0.00', 'aliq': '0.00', 'valor': '0.00', 'status': 'Não destacado'}
+                cofins_info = {'tributo': 'COFINS', 'cst': '-', 'base': '0.00', 'aliq': '0.00', 'valor': '0.00', 'status': 'Não destacado'}
+
                 if pis is not None:
                     for p_child in pis:
                         cst_p = p_child.find('CST').text if p_child.find('CST') is not None else 'N/A'
@@ -601,9 +887,12 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                         val_p = p_child.find('vPIS').text if p_child.find('vPIS') is not None else '0.00'
                         if to_decimal(val_p) > 0 or to_decimal(vbc_p) > 0:
                             pis_part = f"PIS (CST {cst_p}) -> BC: R$ {vbc_p} | Alíq: {aliq_p}% | Valor: R$ {val_p}"
+                            pis_info = {'tributo': 'PIS', 'cst': cst_p, 'base': vbc_p, 'aliq': aliq_p, 'valor': val_p, 'status': 'Tributado'}
                         else:
                             pis_part = f"PIS (CST {cst_p}) -> Sem destaque"
+                            pis_info = {'tributo': 'PIS', 'cst': cst_p, 'base': '0.00', 'aliq': '0.00', 'valor': '0.00', 'status': 'Sem destaque'}
                         break
+                        
                 if cofins is not None:
                     for c_child in cofins:
                         cst_c = c_child.find('CST').text if c_child.find('CST') is not None else 'N/A'
@@ -612,16 +901,29 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                         val_c = c_child.find('vCOFINS').text if c_child.find('vCOFINS') is not None else '0.00'
                         if to_decimal(val_c) > 0 or to_decimal(vbc_c) > 0:
                             cofins_part = f"COFINS (CST {cst_c}) -> BC: R$ {vbc_c} | Alíq: {aliq_c}% | Valor: R$ {val_c}"
+                            cofins_info = {'tributo': 'COFINS', 'cst': cst_c, 'base': vbc_c, 'aliq': aliq_c, 'valor': val_c, 'status': 'Tributado'}
                         else:
                             cofins_part = f"COFINS (CST {cst_c}) -> Sem destaque"
+                            cofins_info = {'tributo': 'COFINS', 'cst': cst_c, 'base': '0.00', 'aliq': '0.00', 'valor': '0.00', 'status': 'Sem destaque'}
                         break
+
                 if pis_part or cofins_part:
                     linhas.append(f"[PIS/COFINS] {pis_part} | {cofins_part}")
 
+                item_obj['impostos'].append(pis_info)
+                item_obj['impostos'].append(cofins_info)
+
+            dados_estruturados['itens'].append(item_obj)
             linhas.append("\n")
         
         # --- TOTAIS GERAIS DA NOTA FISCAL (BATIMENTO E CONFERÊNCIA DATASUL) ---
         total = infNFe.find('total')
+        totais_dict = {
+            'vProd': '0.00', 'vNF': '0.00', 'vFrete': '0.00', 'vSeg': '0.00', 'vDesc': '0.00', 'vOutro': '0.00',
+            'vBC': '0.00', 'vICMS': '0.00', 'vBCST': '0.00', 'vST': '0.00', 'vFCP': '0.00', 'vFCPST': '0.00',
+            'vBC_rtc': '0.00', 'vCBS': '0.00', 'vIBS': '0.00', 'vIS': '0.00', 'vIPI': '0.00', 'vPIS': '0.00', 'vCOFINS': '0.00'
+        }
+
         if total is not None:
             linhas.append("="*80)
             linhas.append("TOTAIS DA NOTA FISCAL (CONFERÊNCIA PARA DIGITAÇÃO / DATASUL)")
@@ -647,6 +949,13 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                 vPIS_tot = icmsTot.find('vPIS').text if icmsTot.find('vPIS') is not None else '0.00'
                 vCOFINS_tot = icmsTot.find('vCOFINS').text if icmsTot.find('vCOFINS') is not None else '0.00'
 
+                totais_dict.update({
+                    'vProd': vProd_tot, 'vNF': vNF_tot, 'vFrete': vFrete_tot, 'vSeg': vSeg_tot,
+                    'vDesc': vDesc_tot, 'vOutro': vOutro_tot, 'vBC': vBC_tot, 'vICMS': vICMS_tot,
+                    'vBCST': vBCST_tot, 'vST': vST_tot, 'vFCP': vFCP_tot, 'vFCPST': vFCPST_tot,
+                    'vIPI': vIPI_tot, 'vPIS': vPIS_tot, 'vCOFINS': vCOFINS_tot
+                })
+
                 linhas.append(f"VALOR DOS PRODUTOS: R$ {vProd_tot} | VALOR TOTAL DA NOTA (vNF): R$ {vNF_tot}")
                 linhas.append(f"FRETE: R$ {vFrete_tot} | SEGURO: R$ {vSeg_tot} | OUTRAS: R$ {vOutro_tot} | DESCONTO: R$ {vDesc_tot}")
                 linhas.append(f"ICMS NORMAL -> Base Total: R$ {vBC_tot} | Valor Total: R$ {vICMS_tot}")
@@ -667,12 +976,23 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                 vCBS_tot_el = ibscbsTot.find('.//vCBS')
                 vCBS_tot = vCBS_tot_el.text if vCBS_tot_el is not None else '0.00'
                 
+                totais_dict.update({'vBC_rtc': vBC_rtc, 'vCBS': vCBS_tot, 'vIBS': vIBS_tot})
                 linhas.append(f"REFORMA TRIBUTÁRIA -> Base RTC: R$ {vBC_rtc} | Total CBS: R$ {vCBS_tot} | Total IBS: R$ {vIBS_tot}")
-                
+            else:
+                # Simula totais de CBS e IBS somando os itens
+                soma_cbs = sum(to_decimal(imp['valor']) for itm in dados_estruturados['itens'] for imp in itm['impostos'] if 'CBS' in imp['tributo'])
+                soma_ibs = sum(to_decimal(imp['valor']) for itm in dados_estruturados['itens'] for imp in itm['impostos'] if 'IBS' in imp['tributo'])
+                totais_dict['vCBS'] = f"{soma_cbs:.2f}"
+                totais_dict['vIBS'] = f"{soma_ibs:.2f}"
+
             isTot = total.find('ISTot')
             if isTot is not None:
                 vIS_tot = isTot.find('vIS').text if isTot.find('vIS') is not None else '0.00'
+                totais_dict['vIS'] = vIS_tot
                 linhas.append(f"IMPOSTO SELETIVO   -> Total IS: R$ {vIS_tot}")
+            else:
+                soma_is = sum(to_decimal(imp['valor']) for itm in dados_estruturados['itens'] for imp in itm['impostos'] if imp['tributo'] == 'IS')
+                totais_dict['vIS'] = f"{soma_is:.2f}"
 
             if icmsTot is not None:
                 linhas.append(f"IPI TOTAL   -> Valor IPI: R$ {vIPI_tot}")
@@ -680,8 +1000,14 @@ def extrair_dados_xml(caminho_arquivo, aliq_interna_informada=0.0, aliq_inter_in
                 
             linhas.append("="*80 + "\n")
 
+        dados_estruturados['totais'] = totais_dict
+
+        if retornar_estruturado:
+            return "\n".join(linhas), chave_xml, dados_estruturados
         return "\n".join(linhas), chave_xml
     except Exception as e:
+        if retornar_estruturado:
+            return f"Ocorreu um erro ao processar o XML:\n{str(e)}", "", {}
         return f"Ocorreu um erro ao processar o XML:\n{str(e)}", ""
 
 def validar_chave_live(*args):
@@ -700,8 +1026,332 @@ def validar_chave_live(*args):
     else:
         lbl_resultado_chave.config(text="❌ ERRADO (Chaves diferentes)", foreground="#dc2626")
 
+def criar_campo_copiavel(parent, valor_str, nome_campo="", width=12, justify="right", font_size=9):
+    """
+    Cria um campo readonly com visual de célula do Datasul.
+    Ao clicar 1 vez:
+    - Copia o número para o clipboard com vírgula e sem ponto de milhar
+    - Pisca a caixinha em verde suave (#bbf7d0) por 350ms
+    - Atualiza a barra de status com mensagem de confirmação
+    """
+    val_copia = str(valor_str).strip()
+    
+    e = tk.Entry(
+        parent,
+        font=("Segoe UI", font_size, "bold"),
+        width=width,
+        justify=justify,
+        relief="solid",
+        bd=1,
+        cursor="hand2"
+    )
+    e.insert(0, val_copia)
+    e.configure(state='readonly', readonlybackground="#ffffff", fg="#0f172a")
+    
+    def on_click(event):
+        try:
+            janela.clipboard_clear()
+            janela.clipboard_append(val_copia)
+            janela.update()
+        except Exception:
+            pass
+        
+        e.configure(readonlybackground="#bbf7d0")
+        e.after(350, lambda: e.configure(readonlybackground="#ffffff"))
+        e.select_range(0, tk.END)
+        
+        lbl_status_copia.config(
+            text=f"📋 Copiado: {val_copia} ({nome_campo}) — Pronto para colar no Datasul!",
+            foreground="#15803d"
+        )
+    
+    def on_enter(event):
+        if e.cget('readonlybackground') != "#bbf7d0":
+            e.configure(readonlybackground="#f1f5f9")
+            
+    def on_leave(event):
+        if e.cget('readonlybackground') != "#bbf7d0":
+            e.configure(readonlybackground="#ffffff")
+
+    e.bind("<Button-1>", on_click)
+    e.bind("<Enter>", on_enter)
+    e.bind("<Leave>", on_leave)
+    return e
+
+def renderizar_totais_card(parent_frame, totais_data):
+    """Renderiza os Totais da Nota Fiscal em destaque no topo da tela Datasul."""
+    card = tk.LabelFrame(
+        parent_frame,
+        text="  TOTAIS DA NOTA FISCAL (CONFERÊNCIA & DIGITAÇÃO NO DATASUL)  ",
+        font=("Segoe UI", 10, "bold"),
+        fg="#1e3a8a",
+        bg="#ffffff",
+        padx=12,
+        pady=8,
+        relief="solid",
+        bd=1
+    )
+    card.pack(fill="x", padx=10, pady=(5, 10))
+    
+    # Linha 1: Valores Comerciais
+    f1 = tk.Frame(card, bg="#ffffff")
+    f1.pack(fill="x", pady=2)
+    
+    col1 = 0
+    def add_tot_field(label_txt, val_txt, desc_campo, width=12):
+        nonlocal col1
+        l = tk.Label(f1, text=label_txt, font=("Segoe UI", 9), bg="#ffffff", fg="#475569")
+        l.grid(row=0, column=col1, padx=(8 if col1 > 0 else 0, 2), sticky="w")
+        col1 += 1
+        c = criar_campo_copiavel(f1, format_datasul(val_txt), desc_campo, width=width)
+        c.grid(row=0, column=col1, padx=(0, 8), sticky="w")
+        col1 += 1
+
+    add_tot_field("Vlr Produtos:", totais_data.get('vProd', '0.00'), "Total Produtos", width=12)
+    add_tot_field("Total da NF (vNF):", totais_data.get('vNF', '0.00'), "Valor Total da Nota", width=12)
+    add_tot_field("Frete:", totais_data.get('vFrete', '0.00'), "Total Frete", width=10)
+    add_tot_field("Seguro:", totais_data.get('vSeg', '0.00'), "Total Seguro", width=10)
+    add_tot_field("Desconto:", totais_data.get('vDesc', '0.00'), "Total Desconto", width=10)
+    add_tot_field("Outras:", totais_data.get('vOutro', '0.00'), "Total Outras Despesas", width=10)
+
+    # Linha 2: Tributos na ordem estrita: ICMS > CBS > IBS > IS > IPI > PIS/COFINS
+    f2 = tk.Frame(card, bg="#ffffff")
+    f2.pack(fill="x", pady=(6, 2))
+    
+    col2 = 0
+    def add_trib_tot_field(label_txt, val_txt, desc_campo, width=11):
+        nonlocal col2
+        l = tk.Label(f2, text=label_txt, font=("Segoe UI", 9, "bold"), bg="#ffffff", fg="#1e293b")
+        l.grid(row=0, column=col2, padx=(8 if col2 > 0 else 0, 2), sticky="w")
+        col2 += 1
+        c = criar_campo_copiavel(f2, format_datasul(val_txt), desc_campo, width=width)
+        c.grid(row=0, column=col2, padx=(0, 8), sticky="w")
+        col2 += 1
+
+    add_trib_tot_field("ICMS:", totais_data.get('vICMS', '0.00'), "ICMS Total")
+    add_trib_tot_field("CBS:", totais_data.get('vCBS', '0.00'), "CBS Total")
+    add_trib_tot_field("IBS:", totais_data.get('vIBS', '0.00'), "IBS Total")
+    add_trib_tot_field("IS:", totais_data.get('vIS', '0.00'), "IS Total")
+    add_trib_tot_field("IPI:", totais_data.get('vIPI', '0.00'), "IPI Total")
+    add_trib_tot_field("PIS:", totais_data.get('vPIS', '0.00'), "PIS Total")
+    add_trib_tot_field("COFINS:", totais_data.get('vCOFINS', '0.00'), "COFINS Total")
+
+def renderizar_item_card(parent_frame, item_data):
+    """Renderiza um card visual completo para um item da NF-e no estilo da tela do Datasul."""
+    card = tk.Frame(parent_frame, bg="#ffffff", relief="solid", bd=1)
+    card.pack(fill="x", padx=10, pady=(0, 15))
+    
+    # 1. Header do Item (Barra Azul de Destaque)
+    header = tk.Frame(card, bg="#1e3a8a", padx=10, pady=6)
+    header.pack(fill="x")
+    
+    lbl_item_titulo = tk.Label(
+        header,
+        text=f"ITEM {str(item_data['num']).zfill(2)}: {item_data['cProd']} - {item_data['xProd']}",
+        font=("Segoe UI", 10, "bold"),
+        bg="#1e3a8a",
+        fg="#ffffff"
+    )
+    lbl_item_titulo.pack(side="left")
+    
+    def copiar_item_resumo():
+        resumo = f"Item {item_data['num']} | NCM: {item_data['ncm']} | CFOP: {item_data['cfop']} | Qtd: {format_datasul_qtd(item_data['qCom'])} | Vl Unit: {format_datasul(item_data['vUnCom'])} | Total: {format_datasul(item_data['vProd'])}"
+        janela.clipboard_clear()
+        janela.clipboard_append(resumo)
+        lbl_status_copia.config(text=f"📋 Copiado resumo do Item {item_data['num']}!", foreground="#15803d")
+        
+    btn_copiar_item = tk.Button(
+        header,
+        text="📋 Copiar Linha do Item",
+        font=("Segoe UI", 8, "bold"),
+        bg="#3b82f6",
+        fg="white",
+        activebackground="#2563eb",
+        relief="flat",
+        cursor="hand2",
+        command=copiar_item_resumo,
+        padx=6,
+        pady=1
+    )
+    btn_copiar_item.pack(side="right")
+    
+    # 2. Barra de Dados Cadastrais (Cinza Claro)
+    dados_cad = tk.Frame(card, bg="#f8fafc", padx=10, pady=8)
+    dados_cad.pack(fill="x")
+    
+    col_idx = 0
+    def add_cad_field(label_txt, val_txt, campo_nome, width=10):
+        nonlocal col_idx
+        lbl = tk.Label(dados_cad, text=label_txt, font=("Segoe UI", 9), bg="#f8fafc", fg="#475569")
+        lbl.grid(row=0, column=col_idx, padx=(6 if col_idx > 0 else 0, 2), sticky="w")
+        col_idx += 1
+        campo = criar_campo_copiavel(dados_cad, val_txt, f"{campo_nome} - Item {item_data['num']}", width=width)
+        campo.grid(row=0, column=col_idx, padx=(0, 6), sticky="w")
+        col_idx += 1
+
+    add_cad_field("Cód:", item_data['cProd'], "Código", width=10)
+    add_cad_field("NCM:", item_data['ncm'], "NCM", width=10)
+    add_cad_field("CFOP:", item_data['cfop'], "CFOP", width=6)
+    add_cad_field("Qtd:", f"{format_datasul_qtd(item_data['qCom'])} {item_data['uCom']}", "Quantidade", width=10)
+    add_cad_field("Vl Unit:", format_datasul(item_data['vUnCom']), "Valor Unitário", width=10)
+    add_cad_field("Vl Total:", format_datasul(item_data['vProd']), "Valor Total", width=11)
+    if to_decimal(item_data.get('vFrete', 0)) > 0:
+        add_cad_field("Frete:", format_datasul(item_data['vFrete']), "Frete", width=9)
+    if to_decimal(item_data.get('vDesc', 0)) > 0:
+        add_cad_field("Desc:", format_datasul(item_data['vDesc']), "Desconto", width=9)
+
+    # 3. Tabela de Impostos (Estilo Tela do Datasul)
+    frame_tabela = tk.Frame(card, bg="#ffffff", padx=10, pady=8)
+    frame_tabela.pack(fill="x")
+    
+    headers = [
+        ("Tributo", 14, "w"),
+        ("CST", 7, "center"),
+        ("Base de Cálculo", 16, "e"),
+        ("Alíquota (%)", 14, "e"),
+        ("Valor do Imposto", 16, "e"),
+        ("Auditoria / Detalhes do Cálculo", 38, "w")
+    ]
+    
+    hdr_frame = tk.Frame(frame_tabela, bg="#e2e8f0")
+    hdr_frame.pack(fill="x", pady=(0, 4))
+    
+    for h_title, h_width, h_anchor in headers:
+        lbl_h = tk.Label(
+            hdr_frame,
+            text=h_title,
+            font=("Segoe UI", 9, "bold"),
+            bg="#e2e8f0",
+            fg="#334155",
+            width=h_width,
+            anchor=h_anchor,
+            padx=4,
+            pady=3
+        )
+        lbl_h.pack(side="left", padx=2)
+        
+    for imp in item_data['impostos']:
+        row_frame = tk.Frame(frame_tabela, bg="#ffffff", pady=2)
+        row_frame.pack(fill="x")
+        
+        # Tributo (escrito chapado, em negrito)
+        lbl_trib = tk.Label(
+            row_frame,
+            text=imp['tributo'],
+            font=("Segoe UI", 9, "bold"),
+            bg="#ffffff",
+            fg="#1e293b",
+            width=14,
+            anchor="w",
+            padx=4
+        )
+        lbl_trib.pack(side="left", padx=2)
+        
+        # CST (caixinha clicável)
+        cst_box = criar_campo_copiavel(
+            row_frame,
+            imp['cst'],
+            f"CST {imp['tributo']} - Item {item_data['num']}",
+            width=7,
+            justify="center"
+        )
+        cst_box.pack(side="left", padx=2)
+        
+        # Base de Cálculo (caixinha clicável com vírgula)
+        base_val = format_datasul(imp['base']) if imp['base'] != '-' else '-'
+        base_box = criar_campo_copiavel(
+            row_frame,
+            base_val,
+            f"Base {imp['tributo']} - Item {item_data['num']}",
+            width=16,
+            justify="right"
+        )
+        base_box.pack(side="left", padx=2)
+        
+        # Alíquota (%) (caixinha clicável com vírgula)
+        aliq_val = format_datasul_aliq(imp['aliq']) if imp['aliq'] != '-' else '-'
+        aliq_box = criar_campo_copiavel(
+            row_frame,
+            aliq_val,
+            f"Alíquota {imp['tributo']} - Item {item_data['num']}",
+            width=14,
+            justify="right"
+        )
+        aliq_box.pack(side="left", padx=2)
+        
+        # Valor do Imposto (caixinha clicável com vírgula)
+        vlr_val = format_datasul(imp['valor']) if imp['valor'] != '-' else '-'
+        vlr_box = criar_campo_copiavel(
+            row_frame,
+            vlr_val,
+            f"Valor {imp['tributo']} - Item {item_data['num']}",
+            width=16,
+            justify="right"
+        )
+        vlr_box.pack(side="left", padx=2)
+        
+        # Auditoria / Detalhes
+        status_txt = imp.get('status', '')
+        fg_status = "#475569"
+        if "✔️" in status_txt or "Conforme" in status_txt:
+            fg_status = "#16a34a"
+        elif "⚠️" in status_txt or "Divergência" in status_txt:
+            fg_status = "#dc2626"
+            
+        lbl_stat = tk.Label(
+            row_frame,
+            text=status_txt,
+            font=("Segoe UI", 9, "bold" if ("✔️" in status_txt or "⚠️" in status_txt) else "normal"),
+            bg="#ffffff",
+            fg=fg_status,
+            anchor="w",
+            padx=6
+        )
+        lbl_stat.pack(side="left", padx=2, fill="x", expand=True)
+
+def renderizar_visao_datasul(dados):
+    """Renderiza a Visão Datasul completa (Totais + Cards de Itens com Tabelas)."""
+    for w in frame_totais_conteudo.winfo_children():
+        w.destroy()
+    for w in frame_itens_scroll.winfo_children():
+        w.destroy()
+        
+    if not dados or not dados.get('itens'):
+        lbl_aviso = tk.Label(
+            frame_itens_scroll,
+            text="Nenhum item encontrado no arquivo selecionado.",
+            font=("Segoe UI", 11),
+            fg="#64748b",
+            bg="#f4f6f9",
+            pady=40
+        )
+        lbl_aviso.pack()
+        return
+        
+    # Renderiza Totais
+    renderizar_totais_card(frame_totais_conteudo, dados.get('totais', {}))
+    
+    # Título da seção de itens
+    lbl_sec = tk.Label(
+        frame_itens_scroll,
+        text="ITENS DA NOTA FISCAL (DIGITAÇÃO NO DATASUL — CLIQUE NO NÚMERO PARA COPIAR COM VÍRGULA)",
+        font=("Segoe UI", 10, "bold"),
+        fg="#1e3a8a",
+        bg="#f4f6f9",
+        pady=4
+    )
+    lbl_sec.pack(anchor="w", padx=10, pady=(0, 6))
+    
+    # Renderiza cada item
+    for item in dados.get('itens', []):
+        renderizar_item_card(frame_itens_scroll, item)
+        
+    # Rola para o topo e seleciona a aba Datasul
+    canvas_itens.yview_moveto(0)
+    notebook.select(0)
+
 def selecionar_arquivo():
-    global chave_xml_atual
+    global chave_xml_atual, dados_nfe_atual
     try:
         aliq_interna_informada = float(var_aliquota_int.get().replace(',', '.'))
         aliq_inter_informada = float(var_aliquota_ext.get().replace(',', '.'))
@@ -717,42 +1367,73 @@ def selecionar_arquivo():
         filetypes=(("Arquivos XML", "*.xml"), ("Todos os arquivos", "*.*"))
     )
     if caminho:
-        resultado_texto, chave_xml_atual = extrair_dados_xml(
+        resultado_texto, chave_xml_atual, dados_estruturados = extrair_dados_xml(
             caminho,
             aliq_interna_informada,
             aliq_inter_informada,
             aliq_icms_informada,
-            aliq_cbs_informada,
-            aliq_ibs_informada
+            aliq_cbs_padrao=aliq_cbs_informada,
+            aliq_ibs_padrao=aliq_ibs_informada,
+            retornar_estruturado=True
         )
+        dados_nfe_atual = dados_estruturados
         
-        # Dispara a validação visual
+        # Dispara a validação visual da chave
         validar_chave_live()
         
-        # Atualiza a área de texto
+        # Atualiza o espelho em texto (Aba 2)
         area_texto.config(state=tk.NORMAL)
         area_texto.delete(1.0, tk.END)
         area_texto.insert(tk.END, resultado_texto)
         area_texto.config(state=tk.DISABLED)
+        
+        # Renderiza a Visão Datasul (Aba 1)
+        renderizar_visao_datasul(dados_estruturados)
+        
+        lbl_status_copia.config(
+            text=f"✔️ XML Carregado: NF {dados_estruturados.get('ide', {}).get('nNF', '')} ({len(dados_estruturados.get('itens', []))} itens). Clique em qualquer valor para copiar!",
+            foreground="#15803d"
+        )
 
 def copiar_resultado():
-    """Copia o conteúdo da área de texto para a área de transferência."""
+    """Copia o conteúdo do espelho de texto para a área de transferência."""
     texto = area_texto.get(1.0, tk.END).strip()
     if texto:
         janela.clipboard_clear()
         janela.clipboard_append(texto)
-        messagebox.showinfo("Copiado", "Resultado copiado para a área de transferência!")
+        messagebox.showinfo("Copiado", "Espelho completo da nota copiado para a área de transferência!")
 
 def limpar_tela():
-    """Zera todos os campos e a área de texto para uma nova leitura."""
-    global chave_xml_atual
+    """Zera todos os campos, abas e área de texto para uma nova leitura."""
+    global chave_xml_atual, dados_nfe_atual
     chave_xml_atual = ""
+    dados_nfe_atual = {}
     var_chave_portal.set("")
     lbl_resultado_chave.config(text="")
     
     area_texto.config(state=tk.NORMAL)
     area_texto.delete(1.0, tk.END)
     area_texto.config(state=tk.DISABLED)
+    
+    for w in frame_totais_conteudo.winfo_children():
+        w.destroy()
+    for w in frame_itens_scroll.winfo_children():
+        w.destroy()
+        
+    lbl_placeholder = tk.Label(
+        frame_itens_scroll,
+        text="📁 Clique em 'Selecionar Arquivo XML' acima para carregar e auditar a NF-e.",
+        font=("Segoe UI", 11),
+        fg="#64748b",
+        bg="#f4f6f9",
+        pady=80
+    )
+    lbl_placeholder.pack()
+    
+    lbl_status_copia.config(
+        text="💡 Dica: Dê 1 clique em qualquer número para copiar para o Datasul (com vírgula).",
+        foreground="#475569"
+    )
 
 def resource_path(relative_path):
     """Retorna o caminho absoluto do recurso, compatível com PyInstaller e execução direta."""
@@ -773,7 +1454,7 @@ except Exception:
 # --- Configuração da Interface Gráfica Moderna ---
 janela = tk.Tk()
 janela.title("Leitor de XML NF-e & Auditor Oficial RTC - Balthazar IA")
-janela.geometry("1000x850")
+janela.geometry("1100x880")
 janela.configure(bg="#f4f6f9")
 
 # Ícone nativo da janela e barra de tarefas (.ico ajustado)
@@ -816,89 +1497,160 @@ estilo.map("Limpar.TButton", background=[("active", "#b91c1c")])
 
 # Container superior
 frame_topo = ttk.Frame(janela)
-frame_topo.pack(pady=15, fill="x", padx=25)
+frame_topo.pack(pady=10, fill="x", padx=20)
 
 lbl_titulo = ttk.Label(frame_topo, text="Extrator de Dados para Implantação Datasul & Auditoria RTC", style="Titulo.TLabel")
-lbl_titulo.pack(pady=(0, 5))
+lbl_titulo.pack(pady=(0, 3))
 
-lbl_instrucao = ttk.Label(frame_topo, text="Extração automatizada de Produtos, Parcelas, ICMS, IPI, PIS/COFINS, DIFAL, ST e Auditoria de IBS/CBS.")
-lbl_instrucao.pack(pady=(0, 10))
+lbl_instrucao = ttk.Label(frame_topo, text="Padrão Datasul: Impostos em ordem estrita (ICMS > CBS > IBS UF > IBS MUN > IS > IPI > PIS/COFINS) com 1 clique para copiar.")
+lbl_instrucao.pack(pady=(0, 8))
 
 # --- GRUPO DE CONFIGURAÇÕES E VALIDAÇÃO (LabelFrame) ---
-frame_config = ttk.LabelFrame(frame_topo, text="Parâmetros de Cálculo & Validação", padding=(15, 10))
-frame_config.pack(fill="x", pady=(0, 10))
+frame_config = ttk.LabelFrame(frame_topo, text="Parâmetros de Cálculo & Validação", padding=(12, 8))
+frame_config.pack(fill="x", pady=(0, 8))
 
-# Configuração do grid para alinhar os elementos
 frame_config.columnconfigure(1, weight=1)
 frame_config.columnconfigure(3, weight=1)
 
 # Linha 0: DIFAL
 lbl_aliq_int = ttk.Label(frame_config, text="DIFAL - Alíq. Interna Padrão (%):")
-lbl_aliq_int.grid(row=0, column=0, padx=(0, 5), pady=4, sticky="e")
+lbl_aliq_int.grid(row=0, column=0, padx=(0, 5), pady=3, sticky="e")
 var_aliquota_int = tk.StringVar(value="22.0")
 entry_aliq_int = ttk.Entry(frame_config, textvariable=var_aliquota_int, width=8, justify="center")
-entry_aliq_int.grid(row=0, column=1, padx=(0, 15), pady=4, sticky="w")
+entry_aliq_int.grid(row=0, column=1, padx=(0, 15), pady=3, sticky="w")
 
 lbl_aliq_ext = ttk.Label(frame_config, text="DIFAL - Alíq. Interestadual (se faltar) (%):")
-lbl_aliq_ext.grid(row=0, column=2, padx=(0, 5), pady=4, sticky="e")
+lbl_aliq_ext.grid(row=0, column=2, padx=(0, 5), pady=3, sticky="e")
 var_aliquota_ext = tk.StringVar(value="12.0")
 entry_aliq_ext = ttk.Entry(frame_config, textvariable=var_aliquota_ext, width=8, justify="center")
-entry_aliq_ext.grid(row=0, column=3, pady=4, sticky="w")
+entry_aliq_ext.grid(row=0, column=3, pady=3, sticky="w")
 
 # Linha 1: ICMS Normal e CBS de Transição
 lbl_aliq_icms = ttk.Label(frame_config, text="ICMS Normal (se faltar no XML) (%):")
-lbl_aliq_icms.grid(row=1, column=0, padx=(0, 5), pady=4, sticky="e")
+lbl_aliq_icms.grid(row=1, column=0, padx=(0, 5), pady=3, sticky="e")
 var_aliquota_icms = tk.StringVar(value="20.0")
 entry_aliq_icms = ttk.Entry(frame_config, textvariable=var_aliquota_icms, width=8, justify="center")
-entry_aliq_icms.grid(row=1, column=1, padx=(0, 15), pady=4, sticky="w")
+entry_aliq_icms.grid(row=1, column=1, padx=(0, 15), pady=3, sticky="w")
 
 lbl_aliq_cbs = ttk.Label(frame_config, text="CBS Transição (se faltar no XML) (%):")
-lbl_aliq_cbs.grid(row=1, column=2, padx=(0, 5), pady=4, sticky="e")
+lbl_aliq_cbs.grid(row=1, column=2, padx=(0, 5), pady=3, sticky="e")
 var_aliquota_cbs = tk.StringVar(value="0.90")
 entry_aliq_cbs = ttk.Entry(frame_config, textvariable=var_aliquota_cbs, width=8, justify="center")
-entry_aliq_cbs.grid(row=1, column=3, pady=4, sticky="w")
+entry_aliq_cbs.grid(row=1, column=3, pady=3, sticky="w")
 
 # Linha 2: IBS de Transição
 lbl_aliq_ibs = ttk.Label(frame_config, text="IBS Transição (se faltar no XML) (%):")
-lbl_aliq_ibs.grid(row=2, column=0, padx=(0, 5), pady=4, sticky="e")
+lbl_aliq_ibs.grid(row=2, column=0, padx=(0, 5), pady=3, sticky="e")
 var_aliquota_ibs = tk.StringVar(value="0.10")
 entry_aliq_ibs = ttk.Entry(frame_config, textvariable=var_aliquota_ibs, width=8, justify="center")
-entry_aliq_ibs.grid(row=2, column=1, padx=(0, 15), pady=4, sticky="w")
+entry_aliq_ibs.grid(row=2, column=1, padx=(0, 15), pady=3, sticky="w")
 
 # Linha 3: Verificação de Chave de Acesso
 lbl_chave = ttk.Label(frame_config, text="Chave de Acesso do Portal:")
-lbl_chave.grid(row=3, column=0, padx=(0, 5), pady=(10, 4), sticky="e")
+lbl_chave.grid(row=3, column=0, padx=(0, 5), pady=(8, 3), sticky="e")
 var_chave_portal = tk.StringVar(value="")
 var_chave_portal.trace_add("write", validar_chave_live)
 
 entry_chave = ttk.Entry(frame_config, textvariable=var_chave_portal, width=48, justify="center")
-entry_chave.grid(row=3, column=1, columnspan=2, padx=(0, 10), pady=(10, 4), sticky="we")
+entry_chave.grid(row=3, column=1, columnspan=2, padx=(0, 10), pady=(8, 3), sticky="we")
 
 lbl_resultado_chave = ttk.Label(frame_config, text="", font=("Segoe UI", 10, "bold"))
-lbl_resultado_chave.grid(row=3, column=3, padx=(0, 5), pady=(10, 4), sticky="w")
-# --------------------------------------------------------
+lbl_resultado_chave.grid(row=3, column=3, padx=(0, 5), pady=(8, 3), sticky="w")
 
-# Container para os botões
+# Container para os botões de ação
 frame_botoes = ttk.Frame(frame_topo)
-frame_botoes.pack(pady=8)
+frame_botoes.pack(pady=6)
 
 btn_abrir = ttk.Button(frame_botoes, text="📁 Selecionar Arquivo XML", command=selecionar_arquivo, style="Principal.TButton", cursor="hand2")
 btn_abrir.grid(row=0, column=0, padx=6)
 
-btn_copiar = ttk.Button(frame_botoes, text="📋 Copiar Resultado", command=copiar_resultado, style="Acao.TButton", cursor="hand2")
+btn_copiar = ttk.Button(frame_botoes, text="📋 Copiar Espelho Completo (Texto)", command=copiar_resultado, style="Acao.TButton", cursor="hand2")
 btn_copiar.grid(row=0, column=1, padx=6)
 
 btn_limpar = ttk.Button(frame_botoes, text="🗑️ Limpar Tudo", command=limpar_tela, style="Limpar.TButton", cursor="hand2")
 btn_limpar.grid(row=0, column=2, padx=6)
 
-# Container para o campo de texto
-frame_texto = ttk.Frame(janela)
-frame_texto.pack(expand=True, fill='both', padx=25, pady=(0, 15))
+# --- NOTEBOOK COM ABAS (VISÃO DATASUL & ESPELHO EM TEXTO) ---
+frame_conteudo = ttk.Frame(janela)
+frame_conteudo.pack(expand=True, fill='both', padx=20, pady=(0, 8))
 
-# Campo de texto (ScrolledText) configurado como bloqueado inicialmente
-area_texto = scrolledtext.ScrolledText(frame_texto, wrap=tk.WORD, font=("Consolas", 10), bg="#ffffff", fg="#2d3748", relief="flat", padx=10, pady=10)
+notebook = ttk.Notebook(frame_conteudo)
+notebook.pack(expand=True, fill='both')
+
+tab_datasul = ttk.Frame(notebook)
+tab_texto = ttk.Frame(notebook)
+
+notebook.add(tab_datasul, text="  🖥️ Tela Datasul (Clique para Copiar)  ")
+notebook.add(tab_texto, text="  📄 Espelho em Texto (Relatório Completo)  ")
+
+# --- CONTEÚDO DA ABA 1: VISÃO DATASUL ---
+# Frame superior fixo para Totais da Nota
+frame_totais_conteudo = tk.Frame(tab_datasul, bg="#f4f6f9")
+frame_totais_conteudo.pack(fill="x", pady=(0, 5))
+
+# Canvas rolável para os Itens da Nota
+canvas_itens = tk.Canvas(tab_datasul, bg="#f4f6f9", highlightthickness=0)
+vbar_itens = ttk.Scrollbar(tab_datasul, orient="vertical", command=canvas_itens.yview)
+canvas_itens.configure(yscrollcommand=vbar_itens.set)
+
+vbar_itens.pack(side="right", fill="y")
+canvas_itens.pack(side="left", fill="both", expand=True)
+
+frame_itens_scroll = tk.Frame(canvas_itens, bg="#f4f6f9")
+canvas_itens_window = canvas_itens.create_window((0, 0), window=frame_itens_scroll, anchor="nw")
+
+def _on_frame_configure(event):
+    canvas_itens.configure(scrollregion=canvas_itens.bbox("all"))
+
+def _on_canvas_configure(event):
+    canvas_itens.itemconfig(canvas_itens_window, width=event.width)
+
+frame_itens_scroll.bind("<Configure>", _on_frame_configure)
+canvas_itens.bind("<Configure>", _on_canvas_configure)
+
+def _on_mousewheel(event):
+    if notebook.index(notebook.select()) == 0:
+        canvas_itens.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+canvas_itens.bind_all("<MouseWheel>", _on_mousewheel)
+
+# Placeholder inicial na aba Datasul
+lbl_placeholder_init = tk.Label(
+    frame_itens_scroll,
+    text="📁 Clique em 'Selecionar Arquivo XML' acima para carregar e auditar a NF-e.",
+    font=("Segoe UI", 11),
+    fg="#64748b",
+    bg="#f4f6f9",
+    pady=80
+)
+lbl_placeholder_init.pack()
+
+# --- CONTEÚDO DA ABA 2: ESPELHO EM TEXTO ---
+area_texto = scrolledtext.ScrolledText(
+    tab_texto,
+    wrap=tk.WORD,
+    font=("Consolas", 10),
+    bg="#ffffff",
+    fg="#2d3748",
+    relief="flat",
+    padx=10,
+    pady=10
+)
 area_texto.pack(expand=True, fill='both')
 area_texto.config(state=tk.DISABLED)
+
+# --- BARRA DE STATUS INFERIOR ---
+frame_status = tk.Frame(janela, bg="#e2e8f0", padx=15, pady=6)
+frame_status.pack(side="bottom", fill="x")
+
+lbl_status_copia = tk.Label(
+    frame_status,
+    text="💡 Dica: Dê 1 clique em qualquer número para copiar para o Datasul (com vírgula).",
+    font=("Segoe UI", 9, "bold"),
+    bg="#e2e8f0",
+    fg="#475569"
+)
+lbl_status_copia.pack(side="left")
 
 if __name__ == '__main__':
     janela.mainloop()
